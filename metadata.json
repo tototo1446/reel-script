@@ -1,0 +1,7 @@
+{
+  "name": "ReelCutter AI - 競合分析 & 台本生成",
+  "description": "競合のリール動画を3層（音声・構成・演出）で解剖し、独自の『勝ち筋』から最短でバズる台本を生成する次世代動画マーケティングツール。",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
