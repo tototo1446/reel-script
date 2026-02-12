@@ -172,6 +172,10 @@ const App: React.FC = () => {
       alert("テーマをもう少し詳しく入力してください（100文字以上）");
       return;
     }
+    if (analyses.length === 0 && !selectedPattern) {
+      alert("パターンを選択するか、分析データを追加してください。");
+      return;
+    }
     setIsGenerating(true);
     try {
       const selectedAnalyses = analyses.filter(a => a.buzzRate >= BUZZ_THRESHOLD);
@@ -469,15 +473,15 @@ const App: React.FC = () => {
                     <div className="flex items-end">
                       <button
                         onClick={handleGenerate}
-                        disabled={isGenerating || analyses.length === 0}
+                        disabled={isGenerating || (analyses.length === 0 && !selectedPattern)}
                         className="px-8 py-3 buzz-gradient rounded-xl font-bold shadow-lg hover:shadow-pink-500/30 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale"
                       >
                         {isGenerating ? 'AI台本生成中...' : '最強の台本を生成'}
                       </button>
                     </div>
                   </div>
-                  {analyses.length === 0 && (
-                    <p className="text-[10px] text-red-400 mt-2">※台本生成には少なくとも1つの分析データが必要です。</p>
+                  {analyses.length === 0 && !selectedPattern && (
+                    <p className="text-[10px] text-red-400 mt-2">※台本生成にはパターン選択または分析データが必要です。</p>
                   )}
                 </div>
               </div>
