@@ -21,6 +21,8 @@ export interface AnalysisData {
   };
   duration: number;
   createdAt: string;
+  fileName?: string;
+  fileSize?: number;
 }
 
 export interface GeneratedScript {
@@ -40,4 +42,30 @@ export interface GrowthData {
   date: string;
   accuracy: number;
   revisions: number;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'model';
+  content: string;
+  timestamp: string;
+}
+
+export interface UserMetrics {
+  totalGenerations: number;
+  totalEdits: number;
+  editHistory: {
+    scriptId: string;
+    instruction: string;
+    timestamp: string;
+  }[];
+  growthData: GrowthData[];
+}
+
+export interface CrossAnalysisResult {
+  commonHookPatterns: string[];
+  commonStructure: string;
+  commonDirection: string;
+  recommendations: string[];
+  analyzedCount: number;
+  createdAt: string;
 }

@@ -1,15 +1,37 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { AnalysisData } from '../types';
 import { BUZZ_THRESHOLD } from '../constants';
 
 interface AnalysisCardProps {
   data: AnalysisData;
   onDelete: (id: string) => void;
+  onUpdate: (id: string, updates: Partial<AnalysisData>) => void;
 }
 
-export const AnalysisCard: React.FC<AnalysisCardProps> = ({ data, onDelete }) => {
+export const AnalysisCard: React.FC<AnalysisCardProps> = ({ data, onDelete, onUpdate }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editViews, setEditViews] = useState(data.views.toString());
+  const [editFollowers, setEditFollowers] = useState(data.followers.toString());
+
   const isBuzz = data.buzzRate >= BUZZ_THRESHOLD;
+
+  const handleSaveMetrics = () => {
+    const views = parseInt(editViews) || 0;
+    const followers = parseInt(editFollowers) || 1;
+    onUpdate(data.id, {
+      views,
+      followers,
+      buzzRate: views / followers,
+    });
+    setIsEditing(false);
+  };
+
+  const handleCancelEdit = () => {
+    setEditViews(data.views.toString());
+    setEditFollowers(data.followers.toString());
+    setIsEditing(false);
+  };
 
   return (
     <div className="glass rounded-2xl p-6 border-l-4 border-l-pink-500 relative overflow-hidden">
@@ -18,17 +40,67 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ data, onDelete }) =>
           Buzz Detected (x{data.buzzRate.toFixed(1)})
         </div>
       )}
-      
+
       <div className="flex justify-between items-start mb-4">
         <div>
           <h3 className="text-xl font-bold text-white mb-1">{data.title}</h3>
-          <div className="flex gap-4 text-sm text-zinc-400">
-            <span>再生: {data.views.toLocaleString()}</span>
-            <span>フォロワー: {data.followers.toLocaleString()}</span>
-            <span>秒数: {data.duration}s</span>
-          </div>
+          {isEditing ? (
+            <div className="flex gap-3 items-center mt-2">
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-zinc-500">再生:</span>
+                <input
+                  type="number"
+                  value={editViews}
+                  onChange={e => setEditViews(e.target.value)}
+                  className="w-28 bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-pink-500"
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-zinc-500">フォロワー:</span>
+                <input
+                  type="number"
+                  value={editFollowers}
+                  onChange={e => setEditFollowers(e.target.value)}
+                  className="w-28 bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-pink-500"
+                />
+              </div>
+              <button onClick={handleSaveMetrics} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold transition-colors">
+                保存
+              </button>
+              <button onClick={handleCancelEdit} className="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs transition-colors">
+                取消
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-4 text-sm text-zinc-400">
+              <span>再生: {data.views > 0 ? data.views.toLocaleString() : '未設定'}</span>
+              <span>フォロワー: {data.followers > 0 ? data.followers.toLocaleString() : '未設定'}</span>
+              <span>秒数: {data.duration}s</span>
+              {data.views === 0 && data.followers === 0 && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="text-pink-400 hover:text-pink-300 text-xs font-bold transition-colors"
+                >
+                  数値を入力
+                </button>
+              )}
+              {(data.views > 0 || data.followers > 0) && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="text-zinc-500 hover:text-zinc-300 text-xs transition-colors"
+                >
+                  編集
+                </button>
+              )}
+            </div>
+          )}
+          {data.fileName && (
+            <div className="text-[10px] text-zinc-600 mt-1">
+              {data.fileName} {data.fileSize ? `(${(data.fileSize / 1024 / 1024).toFixed(1)}MB)` : ''}
+            </div>
+          )}
         </div>
-        <button 
+        <button
           onClick={() => onDelete(data.id)}
           className="text-zinc-500 hover:text-red-400 transition-colors"
         >

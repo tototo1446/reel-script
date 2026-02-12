@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GeneratedScript } from '../types';
 
 interface ScriptViewerProps {
@@ -8,6 +8,11 @@ interface ScriptViewerProps {
 
 export const ScriptViewer: React.FC<ScriptViewerProps> = ({ script }) => {
   const [completed, setCompleted] = useState<number[]>([]);
+
+  // スクリプト変更時にチェック状態をリセット
+  useEffect(() => {
+    setCompleted([]);
+  }, [script.id]);
 
   const toggleScene = (idx: number) => {
     setCompleted(prev => 
