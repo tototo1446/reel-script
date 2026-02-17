@@ -51,10 +51,14 @@ export const extractFrames = async (
   }
 
   const duration = video.duration;
-  const totalFrames = Math.min(
-    Math.ceil(duration / opts.intervalSeconds),
-    opts.maxFrames
-  );
+
+  // 動画全体をカバーするようにインターバルを自動調整
+  // 例: 90秒の動画 / 最大60フレーム = 1.5秒間隔
+  const naturalFrameCount = Math.ceil(duration / opts.intervalSeconds);
+  const adjustedInterval = naturalFrameCount > opts.maxFrames
+    ? duration / opts.maxFrames
+    : opts.intervalSeconds;
+  const totalFrames = Math.min(naturalFrameCount, opts.maxFrames);
 
   // Determine canvas dimensions from actual video dimensions
   const videoWidth = video.videoWidth;
@@ -68,7 +72,7 @@ export const extractFrames = async (
   const frames: SceneData[] = [];
 
   for (let i = 0; i < totalFrames; i++) {
-    const timestamp = i * opts.intervalSeconds;
+    const timestamp = i * adjustedInterval;
     if (timestamp >= duration) break;
 
     video.currentTime = timestamp;
