@@ -13,6 +13,7 @@ import { AnalysisProgressCard } from './components/AnalysisProgressCard';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFrames, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
+import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DEFAULT_METRICS: UserMetrics = {
@@ -43,12 +44,17 @@ const App: React.FC = () => {
   const [showVideoPreview, setShowVideoPreview] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState<ExtractionProgress | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [supabaseSessionId, setSupabaseSessionId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [pastSessions, setPastSessions] = useState<{ id: string; video_file_name: string; total_scenes: number; analysis_status: string; created_at: string }[]>([]);
 
-  // 初回マウント時: localStorage復元分のチャットセッション初期化
+  // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
     if (generatedScript) {
       initScriptChat(generatedScript);
     }
+    // 過去セッション取得
+    fetchSessions().then(sessions => setPastSessions(sessions));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // videoObjectUrl のクリーンアップ
@@ -123,6 +129,20 @@ const App: React.FC = () => {
       };
 
       setSceneSession(session);
+
+      // Supabaseに保存（バックグラウンド）
+      setIsSaving(true);
+      try {
+        const dbId = await saveSessionToSupabase(session);
+        setSupabaseSessionId(dbId);
+        // 過去セッション一覧を更新
+        const sessions = await fetchSessions();
+        setPastSessions(sessions);
+      } catch (saveErr) {
+        console.error('Supabase保存エラー:', saveErr);
+      } finally {
+        setIsSaving(false);
+      }
     } catch (err) {
       alert(`シーン抽出に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
     } finally {
@@ -140,16 +160,28 @@ const App: React.FC = () => {
       analysisProgress: { current: 0, total: prev.totalScenes, percentage: 0 }
     } : null);
 
+    // Supabase: 分析開始ステータス更新
+    if (supabaseSessionId) {
+      updateSessionAnalysisStatus(supabaseSessionId, 'analyzing');
+    }
+
     try {
       await analyzeSceneFrames(
         sceneSession.scenes,
         (sceneId: string, analysis: SceneAnalysis) => {
           setSceneSession(prev => {
             if (!prev) return null;
+            const scene = prev.scenes.find(s => s.id === sceneId);
             const updatedScenes = prev.scenes.map(s =>
               s.id === sceneId ? { ...s, analysis, analysisStatus: 'completed' as const } : s
             );
             const completedCount = updatedScenes.filter(s => s.analysisStatus === 'completed').length;
+
+            // Supabase: 個別シーンの分析結果を保存
+            if (supabaseSessionId && scene) {
+              updateSceneAnalysis(supabaseSessionId, scene.sceneNumber, analysis);
+            }
+
             return {
               ...prev,
               scenes: updatedScenes,
@@ -173,8 +205,18 @@ const App: React.FC = () => {
       );
 
       setSceneSession(prev => prev ? { ...prev, analysisStatus: 'completed' } : null);
+
+      // Supabase: 分析完了ステータス更新
+      if (supabaseSessionId) {
+        updateSessionAnalysisStatus(supabaseSessionId, 'completed');
+        const sessions = await fetchSessions();
+        setPastSessions(sessions);
+      }
     } catch (err) {
       setSceneSession(prev => prev ? { ...prev, analysisStatus: 'error' } : null);
+      if (supabaseSessionId) {
+        updateSessionAnalysisStatus(supabaseSessionId, 'error');
+      }
       alert(`AI分析に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
     }
   };
