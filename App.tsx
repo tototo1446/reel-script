@@ -1,11 +1,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult } from './types';
+import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
-import { analyzeCompetitorReel, generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript } from './services/geminiService';
-import { AnalysisCard } from './components/AnalysisCard';
+import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames } from './services/geminiService';
 import { ScriptViewer } from './components/ScriptViewer';
+import { SceneUploader } from './components/SceneUploader';
+import { SceneHeader } from './components/SceneHeader';
+import { SceneToolbar } from './components/SceneToolbar';
+import { SceneGrid } from './components/SceneGrid';
+import { VideoPreviewModal } from './components/VideoPreviewModal';
+import { AnalysisProgressCard } from './components/AnalysisProgressCard';
 import { useLocalStorage } from './hooks/useLocalStorage';
+import { extractFrames, ExtractionProgress } from './utils/videoFrameExtractor';
+import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DEFAULT_METRICS: UserMetrics = {
@@ -18,14 +25,11 @@ const DEFAULT_METRICS: UserMetrics = {
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>('ANALYSIS');
   const [analyses, setAnalyses] = useLocalStorage<AnalysisData[]>('reelcutter_analyses', []);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [genTheme, setGenTheme] = useState('');
   const [genTone, setGenTone] = useState(TONES[0]);
   const [generatedScript, setGeneratedScript] = useLocalStorage<GeneratedScript | null>('reelcutter_script', null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<string>('');
-  const [dragCounter, setDragCounter] = useState(0);
   const [userMetrics, setUserMetrics] = useLocalStorage<UserMetrics>('reelcutter_metrics', DEFAULT_METRICS);
   const [crossAnalysis, setCrossAnalysis] = useLocalStorage<CrossAnalysisResult | null>('reelcutter_cross', null);
   const [isCrossAnalyzing, setIsCrossAnalyzing] = useState(false);
@@ -33,12 +37,28 @@ const App: React.FC = () => {
   const [chatInput, setChatInput] = useState('');
   const [isRewriting, setIsRewriting] = useState(false);
 
+  // シーン分析 state
+  const [sceneSession, setSceneSession] = useState<SceneExtractionSession | null>(null);
+  const [sceneViewMode, setSceneViewMode] = useState<SceneViewMode>('grid');
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [extractionProgress, setExtractionProgress] = useState<ExtractionProgress | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+
   // 初回マウント時: localStorage復元分のチャットセッション初期化
   useEffect(() => {
     if (generatedScript) {
       initScriptChat(generatedScript);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // videoObjectUrl のクリーンアップ
+  useEffect(() => {
+    return () => {
+      if (sceneSession?.videoObjectUrl) {
+        URL.revokeObjectURL(sceneSession.videoObjectUrl);
+      }
+    };
+  }, [sceneSession?.videoObjectUrl]);
 
   // メトリクス更新ヘルパー
   const updateMetrics = useCallback((type: 'generation' | 'edit', scriptId?: string, instruction?: string) => {
@@ -70,103 +90,144 @@ const App: React.FC = () => {
     });
   }, [setUserMetrics]);
 
-  // 単一/複数ファイルの解析処理
-  const processFiles = async (files: File[]) => {
-    if (isAnalyzing) {
-      alert('現在分析中です。完了後に再度お試しください。');
+  // === シーン分析ハンドラー ===
+
+  const handleSceneExtraction = async (file: File) => {
+    if (file.size > 100 * 1024 * 1024) {
+      alert('100MBを超えるファイルはアップロードできません。');
       return;
     }
 
-    const videoFiles = files.filter(f => f.type.startsWith('video/'));
-    if (videoFiles.length === 0) {
-      alert('動画ファイル（MP4/MOV）を選択してください。');
-      return;
+    setIsExtracting(true);
+    setExtractionProgress(null);
+
+    try {
+      const { frames, duration, videoObjectUrl } = await extractFrames(
+        file,
+        { intervalSeconds: 1, maxFrames: 60, quality: 0.8 },
+        (progress) => setExtractionProgress(progress)
+      );
+
+      const session: SceneExtractionSession = {
+        id: Math.random().toString(36).substr(2, 9),
+        videoFileName: file.name,
+        videoFileSize: file.size,
+        videoDuration: duration,
+        videoObjectUrl,
+        scenes: frames,
+        totalScenes: frames.length,
+        extractionStatus: 'extracted',
+        analysisStatus: 'idle',
+        analysisProgress: { current: 0, total: frames.length, percentage: 0 },
+        createdAt: new Date().toISOString(),
+      };
+
+      setSceneSession(session);
+    } catch (err) {
+      alert(`シーン抽出に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
+    } finally {
+      setIsExtracting(false);
+      setExtractionProgress(null);
     }
+  };
 
-    setIsAnalyzing(true);
-    setUploadProgress('');
+  const handleStartSceneAnalysis = async () => {
+    if (!sceneSession) return;
 
-    for (let i = 0; i < videoFiles.length; i++) {
-      const file = videoFiles[i];
-      try {
-        if (file.size > 100 * 1024 * 1024) {
-          alert(`${file.name} は100MBを超えています。スキップします。`);
-          continue;
+    setSceneSession(prev => prev ? {
+      ...prev,
+      analysisStatus: 'analyzing',
+      analysisProgress: { current: 0, total: prev.totalScenes, percentage: 0 }
+    } : null);
+
+    try {
+      await analyzeSceneFrames(
+        sceneSession.scenes,
+        (sceneId: string, analysis: SceneAnalysis) => {
+          setSceneSession(prev => {
+            if (!prev) return null;
+            const updatedScenes = prev.scenes.map(s =>
+              s.id === sceneId ? { ...s, analysis, analysisStatus: 'completed' as const } : s
+            );
+            const completedCount = updatedScenes.filter(s => s.analysisStatus === 'completed').length;
+            return {
+              ...prev,
+              scenes: updatedScenes,
+              analysisProgress: {
+                current: completedCount,
+                total: prev.totalScenes,
+                percentage: Math.round((completedCount / prev.totalScenes) * 100)
+              }
+            };
+          });
+        },
+        (current: number, _total: number) => {
+          setSceneSession(prev => {
+            if (!prev) return null;
+            const updatedScenes = prev.scenes.map((s, i) =>
+              i === current - 1 ? { ...s, analysisStatus: 'analyzing' as const } : s
+            );
+            return { ...prev, scenes: updatedScenes };
+          });
         }
+      );
 
-        const progressPrefix = videoFiles.length > 1 ? `[${i + 1}/${videoFiles.length}] ` : '';
-        const result = await analyzeCompetitorReel(file, (status) => {
-          setUploadProgress(progressPrefix + status);
-        });
-
-        const newAnalysis: AnalysisData = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: result.title || '新規分析ビデオ',
-          views: 0,
-          followers: 0,
-          buzzRate: 0,
-          duration: result.duration || 30,
-          transcription: result.transcription || '',
-          structure: result.structure || { hook: '', problem: '', solution: '', cta: '' },
-          direction: result.direction || { camera: '', person: '', caption: '' },
-          createdAt: new Date().toISOString(),
-          fileName: file.name,
-          fileSize: file.size,
-        };
-
-        setAnalyses(prev => [newAnalysis, ...prev]);
-      } catch (err) {
-        console.error(`${file.name} の分析に失敗:`, err);
-        alert(`${file.name} の分析に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
-      }
+      setSceneSession(prev => prev ? { ...prev, analysisStatus: 'completed' } : null);
+    } catch (err) {
+      setSceneSession(prev => prev ? { ...prev, analysisStatus: 'error' } : null);
+      alert(`AI分析に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
     }
-
-    setIsAnalyzing(false);
-    setUploadProgress('');
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    await processFiles(Array.from(e.target.files));
-    e.target.value = '';
+  const handleSelectAll = () => {
+    setSceneSession(prev => prev ? {
+      ...prev,
+      scenes: prev.scenes.map(s => ({ ...s, isSelected: true }))
+    } : null);
   };
 
-  // D&D ハンドラ (カウンター方式でちらつき防止)
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragCounter(prev => prev + 1);
-  }, []);
+  const handleDeselectAll = () => {
+    setSceneSession(prev => prev ? {
+      ...prev,
+      scenes: prev.scenes.map(s => ({ ...s, isSelected: false }))
+    } : null);
+  };
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-  }, []);
+  const handleToggleSceneSelection = (id: string) => {
+    setSceneSession(prev => prev ? {
+      ...prev,
+      scenes: prev.scenes.map(s => s.id === id ? { ...s, isSelected: !s.isSelected } : s)
+    } : null);
+  };
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragCounter(prev => prev - 1);
-  }, []);
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragCounter(0);
-    const files: File[] = [];
-    for (let i = 0; i < e.dataTransfer.files.length; i++) {
-      files.push(e.dataTransfer.files[i]);
+  const handleClearScenes = () => {
+    if (sceneSession?.videoObjectUrl) {
+      URL.revokeObjectURL(sceneSession.videoObjectUrl);
     }
-    if (files.length > 0) {
-      await processFiles(files);
+    setSceneSession(null);
+  };
+
+  const handleDownloadScene = (scene: typeof sceneSession extends null ? never : NonNullable<typeof sceneSession>['scenes'][number]) => {
+    downloadSceneThumbnail(scene);
+  };
+
+  const handleDownloadZip = async () => {
+    if (!sceneSession) return;
+    const selected = sceneSession.scenes.filter(s => s.isSelected);
+    if (selected.length === 0) {
+      alert('ダウンロードするシーンを選択してください。');
+      return;
     }
-  }, []);
-
-  const deleteAnalysis = (id: string) => {
-    setAnalyses(prev => prev.filter(a => a.id !== id));
+    await downloadScenesZip(selected);
   };
 
-  const updateAnalysis = (id: string, updates: Partial<AnalysisData>) => {
-    setAnalyses(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
+  const handleDownloadTsv = () => {
+    if (!sceneSession) return;
+    downloadScenesTsv(sceneSession.scenes, sceneSession.videoFileName.replace(/\.[^.]+$/, ''));
   };
 
-  // 台本生成
+  // === 台本生成ハンドラー ===
+
   const handleGenerate = async () => {
     if (genTheme.length < 100) {
       alert("テーマをもう少し詳しく入力してください（100文字以上）");
@@ -262,159 +323,108 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* D&D Overlay */}
-      {dragCounter > 0 && (
-        <div className="fixed inset-0 z-[100] bg-pink-500/10 backdrop-blur-sm flex items-center justify-center">
-          <div className="glass p-12 rounded-3xl border-2 border-dashed border-pink-500 text-center">
-            <div className="text-4xl mb-4">📹</div>
-            <p className="text-2xl font-bold text-pink-400">ここにドロップして分析開始</p>
-            <p className="text-sm text-zinc-400 mt-2">MP4 / MOV形式に対応</p>
-          </div>
-        </div>
-      )}
-
       {/* Header / Nav */}
-      <header className="glass sticky top-0 z-50 px-6 py-4 flex justify-between items-center border-b border-zinc-800">
+      <header className="glass sticky top-0 z-50 px-6 py-4 flex justify-between items-center border-b border-zinc-800/50">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 buzz-gradient rounded-lg flex items-center justify-center font-bold italic">R</div>
-          <h1 className="text-xl font-bold tracking-tighter">ReelCutter <span className="text-pink-500">AI</span></h1>
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold italic text-sm">🎬</div>
+          <h1 className="text-xl font-bold tracking-tighter text-white">Reel Scene <span className="text-pink-400">Analyzer</span></h1>
         </div>
 
-        <nav className="flex bg-zinc-900 p-1 rounded-xl">
+        <nav className="flex bg-zinc-900/80 p-1 rounded-xl backdrop-blur-sm">
           <button
             onClick={() => setMode('ANALYSIS')}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'ANALYSIS' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'ANALYSIS' ? 'bg-zinc-700 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
             分析モード
           </button>
           <button
             onClick={() => setMode('GENERATION')}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'GENERATION' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'GENERATION' ? 'bg-zinc-700 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
             台本生成
           </button>
           <button
             onClick={() => setMode('LOGS')}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'LOGS' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'LOGS' ? 'bg-zinc-700 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
             成長ログ
           </button>
         </nav>
+
+        <div className="w-8 h-8 bg-zinc-800/80 rounded-full flex items-center justify-center cursor-pointer hover:bg-zinc-700 transition-colors">
+          <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </div>
       </header>
 
-      <main
-        className="flex-1 p-6 max-w-7xl mx-auto w-full"
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
+      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
+        {/* === 分析モード (シーン分析UI) === */}
         {mode === 'ANALYSIS' && (
-          <div className="space-y-8 animate-in fade-in duration-500">
-            <section className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <div>
-                <h2 className="text-2xl font-bold mb-1">分析アーカイブ</h2>
-                <p className="text-zinc-400 text-sm">競合の動画をアップロード（またはドラッグ&ドロップ）して「勝ちの3層構造」を解剖します。</p>
-              </div>
-              <div className="flex gap-2">
-                <button className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-sm font-medium border border-zinc-700 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  拡張機能から同期
-                </button>
-                <label className="cursor-pointer px-6 py-2 buzz-gradient rounded-xl text-sm font-bold shadow-lg hover:shadow-pink-500/20 transition-all active:scale-95 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 4v16m8-8H4" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  新規動画アップロード
-                  <input type="file" className="hidden" accept="video/mp4,video/quicktime" multiple onChange={handleUpload} />
-                </label>
-              </div>
-            </section>
-
-            {isAnalyzing && (
-              <div className="glass p-8 rounded-2xl flex flex-col items-center justify-center border-dashed border-2 border-pink-500/30">
-                <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <p className="text-pink-400 font-bold animate-pulse">
-                  {uploadProgress || 'AIが動画を3層構造に解剖中...'}
-                </p>
-                <p className="text-zinc-500 text-xs mt-2">（動画アップロード・音声解析・構成分解・演出言語化を実行しています）</p>
-              </div>
-            )}
-
-            {/* クロス分析セクション */}
-            {analyses.length >= 2 && (
-              <div className="glass p-6 rounded-2xl border-l-4 border-l-blue-500">
-                <div className="flex justify-between items-center mb-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
-                      クロス分析 — 共通パターン抽出
-                    </h3>
-                    <p className="text-zinc-500 text-xs mt-1">{analyses.length}件の分析データから共通する勝ちパターンを特定</p>
-                  </div>
-                  <button
-                    onClick={handleCrossAnalysis}
-                    disabled={isCrossAnalyzing}
-                    className="px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-sm font-bold transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {isCrossAnalyzing ? '分析中...' : '共通パターンを抽出'}
-                  </button>
-                </div>
-
-                {crossAnalysis && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    <div className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-800">
-                      <div className="text-xs font-bold text-blue-400 uppercase mb-2">共通フックパターン</div>
-                      <ul className="text-xs space-y-1 text-zinc-300">
-                        {crossAnalysis.commonHookPatterns.map((p, i) => (
-                          <li key={i} className="flex items-start gap-2">
-                            <span className="text-blue-400 mt-0.5">•</span>
-                            <span>{p}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-800">
-                      <div className="text-xs font-bold text-emerald-400 uppercase mb-2">共通構成パターン</div>
-                      <p className="text-xs text-zinc-300">{crossAnalysis.commonStructure}</p>
-                      <div className="text-xs font-bold text-pink-400 uppercase mb-2 mt-3">共通演出パターン</div>
-                      <p className="text-xs text-zinc-300">{crossAnalysis.commonDirection}</p>
-                    </div>
-                    <div className="md:col-span-2 bg-zinc-900/50 p-4 rounded-xl border border-zinc-800">
-                      <div className="text-xs font-bold text-yellow-400 uppercase mb-2">推奨事項</div>
-                      <ul className="text-xs space-y-1 text-zinc-300">
-                        {crossAnalysis.recommendations.map((r, i) => (
-                          <li key={i} className="flex items-start gap-2">
-                            <span className="text-yellow-400 mt-0.5">{i + 1}.</span>
-                            <span>{r}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 gap-6">
-              {analyses.length > 0 ? (
-                analyses.map(analysis => (
-                  <AnalysisCard
-                    key={analysis.id}
-                    data={analysis}
-                    onDelete={deleteAnalysis}
-                    onUpdate={updateAnalysis}
+          <div className="space-y-6 animate-in fade-in duration-500">
+            {!sceneSession ? (
+              <SceneUploader
+                onFileSelected={handleSceneExtraction}
+                isExtracting={isExtracting}
+                extractionProgress={extractionProgress}
+              />
+            ) : (
+              <>
+                {/* AI分析進捗 */}
+                {sceneSession.analysisStatus === 'analyzing' && (
+                  <AnalysisProgressCard
+                    current={sceneSession.analysisProgress.current}
+                    total={sceneSession.analysisProgress.total}
+                    percentage={sceneSession.analysisProgress.percentage}
                   />
-                ))
-              ) : (
-                <div className="glass p-12 rounded-2xl border-2 border-dashed border-zinc-800 text-center">
-                  <div className="text-4xl mb-4 opacity-30">📹</div>
-                  <p className="text-zinc-500 text-sm mb-2">まだ分析データがありません</p>
-                  <p className="text-zinc-600 text-xs">動画をアップロード、またはここにドラッグ&ドロップして始めましょう。</p>
-                </div>
-              )}
-            </div>
+                )}
+
+                {/* ヘッダー */}
+                <SceneHeader
+                  totalScenes={sceneSession.totalScenes}
+                  onOpenVideoPreview={() => setShowVideoPreview(true)}
+                  onStartAnalysis={handleStartSceneAnalysis}
+                  isAnalyzing={sceneSession.analysisStatus === 'analyzing'}
+                  analysisCompleted={sceneSession.analysisStatus === 'completed'}
+                />
+
+                {/* ツールバー */}
+                <SceneToolbar
+                  totalScenes={sceneSession.totalScenes}
+                  selectedCount={sceneSession.scenes.filter(s => s.isSelected).length}
+                  viewMode={sceneViewMode}
+                  onSelectAll={handleSelectAll}
+                  onDeselectAll={handleDeselectAll}
+                  onClear={handleClearScenes}
+                  onDownloadZip={handleDownloadZip}
+                  onDownloadTsv={handleDownloadTsv}
+                  onSetViewMode={setSceneViewMode}
+                />
+
+                {/* シーングリッド */}
+                <SceneGrid
+                  scenes={sceneSession.scenes}
+                  viewMode={sceneViewMode}
+                  onSelectScene={handleToggleSceneSelection}
+                  onDownloadScene={handleDownloadScene}
+                />
+              </>
+            )}
+
+            {/* 動画プレビューモーダル */}
+            {showVideoPreview && sceneSession && (
+              <VideoPreviewModal
+                isOpen={showVideoPreview}
+                onClose={() => setShowVideoPreview(false)}
+                videoObjectUrl={sceneSession.videoObjectUrl}
+                scenes={sceneSession.scenes}
+              />
+            )}
           </div>
         )}
 
+        {/* === 台本生成モード === */}
         {mode === 'GENERATION' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in slide-in-from-bottom-4 duration-500">
             {/* Strategy Sidebar */}
@@ -587,6 +597,7 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {/* === 成長ログモード === */}
         {mode === 'LOGS' && (
           <div className="space-y-8 animate-in zoom-in-95 duration-500">
              <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -669,8 +680,8 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="p-8 text-center text-zinc-600 text-[10px] uppercase tracking-widest">
-        &copy; 2025 ReelCutter AI Engine. Privacy Protected. All data deleted after analysis.
+      <footer className="p-8 text-center text-zinc-500 text-[10px] uppercase tracking-widest">
+        &copy; 2025 Reel Scene Analyzer. Privacy Protected. All data deleted after analysis.
       </footer>
     </div>
   );

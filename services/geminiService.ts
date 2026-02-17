@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, createPartFromUri, FileState, Chat } from "@google/genai";
-import { AnalysisData, GeneratedScript, CrossAnalysisResult } from "../types";
+import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis } from "../types";
 import { DEFAULT_PATTERNS } from "../constants";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
@@ -272,6 +272,66 @@ export const initScriptChat = (script: GeneratedScript): void => {
       }
     ]
   });
+};
+
+// シーンフレームの個別AI分析
+export const analyzeSceneFrames = async (
+  scenes: SceneData[],
+  onSceneAnalyzed: (sceneId: string, analysis: SceneAnalysis) => void,
+  onProgress: (current: number, total: number) => void
+): Promise<void> => {
+  for (let i = 0; i < scenes.length; i++) {
+    const scene = scenes[i];
+    onProgress(i + 1, scenes.length);
+
+    try {
+      const base64Data = scene.thumbnailDataUrl.split(',')[1];
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [
+          {
+            inlineData: {
+              mimeType: 'image/jpeg',
+              data: base64Data,
+            },
+          },
+          `この動画フレーム画像を分析してください。
+シーン番号: ${scene.sceneNumber}
+タイムスタンプ: ${scene.timestampFormatted}
+
+以下を出力:
+1. description: シーンの内容を2-3文で簡潔に説明（日本語）
+2. tags: 関連ハッシュタグを3-5個（#付き、日本語）`
+        ],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              description: { type: Type.STRING },
+              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+            required: ['description', 'tags']
+          }
+        }
+      });
+
+      const analysis: SceneAnalysis = JSON.parse(response.text!);
+      onSceneAnalyzed(scene.id, analysis);
+    } catch (err) {
+      console.error(`シーン${scene.sceneNumber}の分析に失敗:`, err);
+      onSceneAnalyzed(scene.id, {
+        description: '分析に失敗しました',
+        tags: [],
+      });
+    }
+
+    // Rate limit対策: 少し間隔を空ける
+    if (i < scenes.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+  }
 };
 
 export const rewriteScript = async (instruction: string): Promise<GeneratedScript> => {

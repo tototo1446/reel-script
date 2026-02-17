@@ -69,3 +69,36 @@ export interface CrossAnalysisResult {
   analyzedCount: number;
   createdAt: string;
 }
+
+// シーン分析関連の型
+export interface SceneAnalysis {
+  description: string;
+  tags: string[];
+}
+
+export interface SceneData {
+  id: string;
+  sceneNumber: number;
+  timestamp: number;
+  timestampFormatted: string;
+  thumbnailDataUrl: string;
+  isSelected: boolean;
+  analysis: SceneAnalysis | null;
+  analysisStatus: 'pending' | 'analyzing' | 'completed' | 'error';
+}
+
+export interface SceneExtractionSession {
+  id: string;
+  videoFileName: string;
+  videoFileSize: number;
+  videoDuration: number;
+  videoObjectUrl: string;
+  scenes: SceneData[];
+  totalScenes: number;
+  extractionStatus: 'idle' | 'extracting' | 'extracted' | 'error';
+  analysisStatus: 'idle' | 'analyzing' | 'completed' | 'error';
+  analysisProgress: { current: number; total: number; percentage: number };
+  createdAt: string;
+}
+
+export type SceneViewMode = 'grid' | 'carousel';
