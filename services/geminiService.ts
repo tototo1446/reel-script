@@ -274,8 +274,8 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
-/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする */
-const MIN_SCENE_INTERVAL_SEC = 1.5;
+/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする（テロップ細分割のため1秒に設定） */
+const MIN_SCENE_INTERVAL_SEC = 1;
 
 /** 動画の長さ（秒）を取得 */
 const getVideoDuration = (file: File): Promise<number> =>
@@ -320,7 +320,7 @@ export const detectSceneChangeTimestamps = async (
 - カメラアングル・構図の変更（アップ↔引き、横顔↔正面、クローズアップ、製品のアップなど）
 - 場所・背景の変化（例：部屋→洗面所）
 - 人物の出入り、別の人物への切り替え
-- テロップ・キャプションの内容の切り替え（テキストが変わるたびに検出。「ねぇ」「みたいなの ある？」「コレだけ使ってりゃいい！」など、各テロップの出現を漏れなく検出）
+- テロップ・キャプションの内容の切り替え（テキストが1つ変わるたびに必ず検出。「ねぇ」「みたいなの ある？」「コレだけ使ってりゃいい！」「泡立てかた」「保湿ケアを」など、表示されるテロップごとに新シーンとして検出）
 - 製品・アイテムの切り替え（手に持つものが変わる、紹介する商品が変わる）
 
 【分割しないケース】
@@ -328,7 +328,7 @@ export const detectSceneChangeTimestamps = async (
 - 表情の変化、手の動きだけ（テロップ・製品に変化がない場合）= 分割しない
 
 【目安】
-- 60秒の動画なら通常10〜25シーン程度。それより少ない場合は見落としがないか再確認する
+- 60秒の動画なら通常15〜35シーン程度。テロップが多い動画ではさらに多くなる。少なすぎる場合は見落としを疑う
 
 【その他】
 - 各シーンの代表フレームとして、切り替わり直後の秒数を返す（小数可: 5.2, 12.8）
@@ -366,15 +366,15 @@ export const detectSceneChangeTimestamps = async (
     }
   }
 
-  // フォールバック: LLMの検出が粗い場合（1シーンあたり15秒以上）、定期サンプルを補完
+  // フォールバック: LLMの検出が粗い場合、定期サンプルを補完して細かく分割
   try {
     const duration = await getVideoDuration(file);
     const scenesPerMinute = duration > 0 ? filtered.length / (duration / 60) : 0;
-    if (duration > 30 && scenesPerMinute < 5) {
-      const supplementInterval = 6;
+    if (duration > 20 && scenesPerMinute < 8) {
+      const supplementInterval = 4;
       const supplemented: number[] = [...filtered];
       for (let t = supplementInterval; t < duration - 1; t += supplementInterval) {
-        const nearExisting = supplemented.some((existing) => Math.abs(existing - t) < 4);
+        const nearExisting = supplemented.some((existing) => Math.abs(existing - t) < 2.5);
         if (!nearExisting) supplemented.push(t);
       }
       supplemented.sort((a, b) => a - b);
