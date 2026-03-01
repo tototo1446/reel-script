@@ -11,6 +11,10 @@
 - [x] geminiService: フォールバック補完（LLM検出が粗い場合に6秒間隔でサンプルを補完、分/5シーン未満で発動）
 - [x] geminiService: 細かい分割のため最小間隔1秒に変更、補完条件を緩和（分/8シーン未満・4秒間隔・20秒以上で発動）
 - [x] geminiService: さらに細分化（最小間隔0.8秒、補完: 分/15シーン未満・3秒間隔・15秒以上、テロップ例追加「ドラッグストアよく見ない？」等）
+- [x] フレーム単位分析の導入（Agentic Vision相当の高精度検出）
+  - videoFrameExtractor: `extractFramesAtFixedInterval` 追加（1.5秒間隔でフレーム抽出）
+  - geminiService: 1) フレーム抽出 → 2) 8フレームずつGemini 2.5 Proで分析 → 3) テロップ・カット変化を検出
+  - フォールバック: フレーム抽出/分析失敗時は動画全体をGemini 2.5 Proで分析
 
 ## 2025-02-26 シーン分割LLM化
 

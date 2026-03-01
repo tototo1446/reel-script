@@ -2,6 +2,7 @@
 import { GoogleGenAI, Type, createPartFromUri, FileState, Chat } from "@google/genai";
 import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis } from "../types";
 import { DEFAULT_PATTERNS } from "../constants";
+import { extractFramesAtFixedInterval } from "../utils/videoFrameExtractor";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
@@ -293,72 +294,132 @@ const getVideoDuration = (file: File): Promise<number> =>
     };
   });
 
-// 動画から場面切り替えのタイムスタンプ（秒）をLLMで検出
-export const detectSceneChangeTimestamps = async (
+/** フレーム単位で場面切り替えを検出（Gemini 2.5 Pro使用・高精度） */
+const detectSceneChangeFromFrames = async (
+  frames: { timestamp: number; dataUrl: string }[],
+  onProgress?: (status: string) => void
+): Promise<number[]> => {
+  const BATCH_SIZE = 8;
+  const allTimestamps: number[] = [];
+  const batches = Math.ceil(frames.length / BATCH_SIZE);
+
+  for (let b = 0; b < batches; b++) {
+    const start = b * BATCH_SIZE;
+    const batch = frames.slice(start, start + BATCH_SIZE);
+    const batchTimestamps = batch.map((f) => f.timestamp);
+
+    onProgress?.(`フレームを分析中 (${b + 1}/${batches})...`);
+
+    const parts: unknown[] = batch.map((f) => ({
+      inlineData: {
+        mimeType: 'image/jpeg' as const,
+        data: f.dataUrl.split(',')[1],
+      },
+    }));
+    parts.push({
+      text: `以下の${batch.length}枚の画像は、動画の${batchTimestamps.join(', ')}秒のフレームです。1枚目から順に見て、前のフレームと比べてテロップの内容・カット・構図・製品が変わったフレームの秒数をすべて返してください。0秒（1枚目）が含まれるバッチの場合は0を必ず含める。JSON形式: { "timestamps": [0, 1.5, 3, ...] }`,
+    });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-pro',
+      contents: parts,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            timestamps: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+          },
+          required: ['timestamps'],
+        },
+      },
+    });
+
+    const result = JSON.parse(response.text!) as { timestamps: number[] };
+    const ts = (result.timestamps ?? [])
+      .filter((t) => batchTimestamps.some((bt) => Math.abs(bt - t) < 0.2))
+      .map((t) => batchTimestamps.reduce((prev, curr) => (Math.abs(curr - t) < Math.abs(prev - t) ? curr : prev)));
+    allTimestamps.push(...ts);
+    if (b === 0 && batchTimestamps[0] === 0 && !ts.some((t) => Math.abs(t) < 0.1)) {
+      allTimestamps.push(0);
+    }
+    if (b < batches - 1) await new Promise((r) => setTimeout(r, 300));
+  }
+
+  return [...new Set(allTimestamps)].sort((a, b) => a - b);
+};
+
+/** 動画全体を1回で分析（フォールバック用） */
+const detectSceneChangeFromVideo = async (
   file: File,
   onProgress?: (status: string) => void
 ): Promise<number[]> => {
   const { uri, mimeType } = await uploadAndWaitForFile(file, onProgress);
-
-  onProgress?.('AIが場面の切り替わりを検出中...');
-
-  const videoPart = createPartFromUri(uri, mimeType);
+  onProgress?.('AIが動画を分析中...');
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.5-pro',
     contents: [
-      videoPart,
-      `この動画を視聴し、場面が切り替わったタイミング（秒数）を漏れなく検出してください。1つでも見落としがあれば不十分です。
-
-【検出の基本】
-- 動画を頭から順に一時停止しながら確認し、以下の変化が起きたタイミングをすべて列挙する
-- 検出しすぎるくらいでよい。疑わしい場合も含める。取りこぼしのないよう細かく検出する
-- 0秒（動画の開始）は必ず含める
-
-【分割するケース】※これらは必ず検出する
-- カット割り（別の映像に切り替わる）
-- カメラアングル・構図の変更（アップ↔引き、横顔↔正面、クローズアップ、製品のアップなど）
-- 場所・背景の変化（例：部屋→洗面所）
-- 人物の出入り、別の人物への切り替え
-- テロップ・キャプションの内容の切り替え（テキストが変わるたびに必ず検出。「ねぇ」「ドラッグストアよく見ない？」「コレだけ使ってりゃいい！」「コレしか勝たん」「ニキビケア」「ゴシゴシ厳禁」「さっぱりタイプ」など、表示されるテロップ1つ1つを漏れなく新シーンとして検出。連続する短いテロップもすべて検出する）
-- 製品・アイテムの切り替え（手に持つものが変わる、紹介する商品が変わる）
-
-【分割しないケース】
-- 同じ人物・同じ場所・同じ構図・同じテロップが連続している = 1シーン
-- 表情の変化、手の動きだけ（テロップ・製品に変化がない場合）= 分割しない
-
-【目安】
-- 60秒の動画なら通常20〜40シーン程度。テロップが頻繁に変わる動画では50シーン以上になることもある。少なすぎる場合は見落としを疑う
-
-【その他】
-- 各シーンの代表フレームとして、切り替わり直後の秒数を返す（小数可: 5.2, 12.8）
-- 最大60シーンまで
-
-以下のJSON形式で出力してください:
-{ "timestamps": [0, 5.2, 12.3, ...] }`
+      createPartFromUri(uri, mimeType),
+      `この動画を視聴し、場面が切り替わったタイミング（秒数）を漏れなく検出してください。テロップの変化・カット割り・カメラアングル変更・製品の切り替えをすべて検出。0秒は必ず含める。JSON: { "timestamps": [0, 5.2, 12.3, ...] }`,
     ],
     config: {
-      responseMimeType: "application/json",
+      responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
-        properties: {
-          timestamps: {
-            type: Type.ARRAY,
-            items: { type: Type.NUMBER },
-          },
-        },
+        properties: { timestamps: { type: Type.ARRAY, items: { type: Type.NUMBER } } },
         required: ['timestamps'],
       },
     },
   });
 
   const result = JSON.parse(response.text!) as { timestamps: number[] };
-  let timestamps = result.timestamps ?? [];
+  return [...new Set([0, ...(result.timestamps ?? [])])].sort((a, b) => a - b);
+};
 
-  // 0秒が含まれていなければ追加し、ソート・重複除去
-  let sorted = [...new Set([0, ...timestamps])].sort((a, b) => a - b);
+// 動画から場面切り替えのタイムスタンプ（秒）を検出（フレーム単位分析を優先）
+export const detectSceneChangeTimestamps = async (
+  file: File,
+  onProgress?: (status: string) => void
+): Promise<number[]> => {
+  onProgress?.('フレームを抽出中...');
 
-  // 最小間隔を強制：同じカットが続く場合の細かい分割を除去
+  let frames: { timestamp: number; dataUrl: string }[];
+  try {
+    frames = await extractFramesAtFixedInterval(
+      file,
+      1.5,
+      { quality: 0.8, maxFrames: 80 },
+      (cur, total) => onProgress?.(`フレームを抽出中 (${cur}/${total})...`)
+    );
+  } catch (err) {
+    console.warn('フレーム抽出に失敗、動画分析にフォールバック:', err);
+    const timestamps = await detectSceneChangeFromVideo(file, onProgress);
+    return applyMinIntervalFilter([...new Set([0, ...timestamps])].sort((a, b) => a - b), file);
+  }
+
+  if (frames.length === 0) {
+    const timestamps = await detectSceneChangeFromVideo(file, onProgress);
+    return applyMinIntervalFilter([...new Set([0, ...timestamps])].sort((a, b) => a - b), file);
+  }
+
+  let timestamps: number[];
+  try {
+    timestamps = await detectSceneChangeFromFrames(frames, onProgress);
+  } catch (err) {
+    console.warn('フレーム分析に失敗、動画分析にフォールバック:', err);
+    timestamps = await detectSceneChangeFromVideo(file, onProgress);
+    const sorted = [...new Set([0, ...timestamps])].sort((a, b) => a - b);
+    return applyMinIntervalFilter(sorted, file);
+  }
+
+  if (timestamps.length === 0) timestamps = [0];
+  const sorted = [...new Set([0, ...timestamps])].sort((a, b) => a - b);
+  return applyMinIntervalFilter(sorted, file);
+}
+
+/** 最小間隔フィルタ + 補完 */
+async function applyMinIntervalFilter(sorted: number[], file: File): Promise<number[]> {
   const filtered: number[] = [];
   for (const t of sorted) {
     if (filtered.length === 0 || t - filtered[filtered.length - 1] >= MIN_SCENE_INTERVAL_SEC) {
@@ -366,31 +427,29 @@ export const detectSceneChangeTimestamps = async (
     }
   }
 
-  // フォールバック: LLMの検出が粗い場合、定期サンプルを補完して細かく分割
   try {
     const duration = await getVideoDuration(file);
-    const scenesPerMinute = duration > 0 ? filtered.length / (duration / 60) : 0;
-    if (duration > 15 && scenesPerMinute < 15) {
-      const supplementInterval = 3;
-      const supplemented: number[] = [...filtered];
-      for (let t = supplementInterval; t < duration - 1; t += supplementInterval) {
-        const nearExisting = supplemented.some((existing) => Math.abs(existing - t) < 2);
-        if (!nearExisting) supplemented.push(t);
-      }
-      supplemented.sort((a, b) => a - b);
-      const merged: number[] = [];
-      for (const t of supplemented) {
-        if (merged.length === 0 || t - merged[merged.length - 1] >= MIN_SCENE_INTERVAL_SEC) {
-          merged.push(t);
-        }
-      }
-      return merged;
+    if (!duration || duration <= 15) return filtered;
+    const scenesPerMinute = filtered.length / (duration / 60);
+    if (scenesPerMinute >= 15) return filtered;
+
+    const supplementInterval = 2.5;
+    const supplemented = [...filtered];
+    for (let t = supplementInterval; t < duration - 1; t += supplementInterval) {
+      if (!supplemented.some((e) => Math.abs(e - t) < 1.5)) supplemented.push(t);
     }
+    supplemented.sort((a, b) => a - b);
+    const merged: number[] = [];
+    for (const t of supplemented) {
+      if (merged.length === 0 || t - merged[merged.length - 1] >= MIN_SCENE_INTERVAL_SEC) {
+        merged.push(t);
+      }
+    }
+    return merged;
   } catch {
-    // 動画長取得失敗時は補完しない
+    return filtered;
   }
-  return filtered;
-};
+}
 
 // シーンフレームの個別AI分析
 export const analyzeSceneFrames = async (
