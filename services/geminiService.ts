@@ -274,8 +274,24 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
-/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする（テロップ切り替えを考慮して1.5秒に設定） */
+/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする */
 const MIN_SCENE_INTERVAL_SEC = 1.5;
+
+/** 動画の長さ（秒）を取得 */
+const getVideoDuration = (file: File): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement('video');
+    v.src = url;
+    v.onloadedmetadata = () => {
+      resolve(v.duration);
+      URL.revokeObjectURL(url);
+    };
+    v.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('動画の読み込みに失敗'));
+    };
+  });
 
 // 動画から場面切り替えのタイムスタンプ（秒）をLLMで検出
 export const detectSceneChangeTimestamps = async (
@@ -292,23 +308,27 @@ export const detectSceneChangeTimestamps = async (
     model: 'gemini-2.5-flash',
     contents: [
       videoPart,
-      `この動画を視聴し、場面が切り替わったタイミング（秒数）を漏れなく検出してください。
+      `この動画を視聴し、場面が切り替わったタイミング（秒数）を漏れなく検出してください。1つでも見落としがあれば不十分です。
 
 【検出の基本】
-- 動画全体を確認し、以下の変化が起きたタイミングをすべて列挙する
-- 見落としのないよう、0秒から動画終了まで順に確認する
+- 動画を頭から順に確認し、以下の変化が起きたタイミングをすべて列挙する
+- 検出しすぎるくらいでよい。疑わしい場合も含める
 - 0秒（動画の開始）は必ず含める
 
 【分割するケース】※これらは必ず検出する
 - カット割り（別の映像に切り替わる）
-- カメラアングル・構図の変更（アップ↔引き、横顔↔正面、クローズアップなど）
-- 場所・背景の変化
+- カメラアングル・構図の変更（アップ↔引き、横顔↔正面、クローズアップ、製品のアップなど）
+- 場所・背景の変化（例：部屋→洗面所）
 - 人物の出入り、別の人物への切り替え
-- テロップ・キャプションの内容の切り替え（新しいテキストが表示されたり、表示内容が変わったタイミング。例：「ねぇ」→「時短で…」→「コレだけ使ってりゃいい！」など、各テロップの出現を検出）
+- テロップ・キャプションの内容の切り替え（テキストが変わるたびに検出。「ねぇ」「みたいなの ある？」「コレだけ使ってりゃいい！」など、各テロップの出現を漏れなく検出）
+- 製品・アイテムの切り替え（手に持つものが変わる、紹介する商品が変わる）
 
 【分割しないケース】
-- 同じ人物・同じ場所・同じ構図・同じカメラアングル・同じテロップが連続している = 1シーン
-- 表情の変化、手の動きだけ（テロップに変化がない場合）= 分割しない
+- 同じ人物・同じ場所・同じ構図・同じテロップが連続している = 1シーン
+- 表情の変化、手の動きだけ（テロップ・製品に変化がない場合）= 分割しない
+
+【目安】
+- 60秒の動画なら通常10〜25シーン程度。それより少ない場合は見落としがないか再確認する
 
 【その他】
 - 各シーンの代表フレームとして、切り替わり直後の秒数を返す（小数可: 5.2, 12.8）
@@ -336,7 +356,7 @@ export const detectSceneChangeTimestamps = async (
   let timestamps = result.timestamps ?? [];
 
   // 0秒が含まれていなければ追加し、ソート・重複除去
-  const sorted = [...new Set([0, ...timestamps])].sort((a, b) => a - b);
+  let sorted = [...new Set([0, ...timestamps])].sort((a, b) => a - b);
 
   // 最小間隔を強制：同じカットが続く場合の細かい分割を除去
   const filtered: number[] = [];
@@ -344,6 +364,30 @@ export const detectSceneChangeTimestamps = async (
     if (filtered.length === 0 || t - filtered[filtered.length - 1] >= MIN_SCENE_INTERVAL_SEC) {
       filtered.push(t);
     }
+  }
+
+  // フォールバック: LLMの検出が粗い場合（1シーンあたり15秒以上）、定期サンプルを補完
+  try {
+    const duration = await getVideoDuration(file);
+    const scenesPerMinute = duration > 0 ? filtered.length / (duration / 60) : 0;
+    if (duration > 30 && scenesPerMinute < 5) {
+      const supplementInterval = 6;
+      const supplemented: number[] = [...filtered];
+      for (let t = supplementInterval; t < duration - 1; t += supplementInterval) {
+        const nearExisting = supplemented.some((existing) => Math.abs(existing - t) < 4);
+        if (!nearExisting) supplemented.push(t);
+      }
+      supplemented.sort((a, b) => a - b);
+      const merged: number[] = [];
+      for (const t of supplemented) {
+        if (merged.length === 0 || t - merged[merged.length - 1] >= MIN_SCENE_INTERVAL_SEC) {
+          merged.push(t);
+        }
+      }
+      return merged;
+    }
+  } catch {
+    // 動画長取得失敗時は補完しない
   }
   return filtered;
 };
