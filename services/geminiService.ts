@@ -274,6 +274,76 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
+/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする */
+const MIN_SCENE_INTERVAL_SEC = 2;
+
+// 動画から場面切り替えのタイムスタンプ（秒）をLLMで検出
+export const detectSceneChangeTimestamps = async (
+  file: File,
+  onProgress?: (status: string) => void
+): Promise<number[]> => {
+  const { uri, mimeType } = await uploadAndWaitForFile(file, onProgress);
+
+  onProgress?.('AIが場面の切り替わりを検出中...');
+
+  const videoPart = createPartFromUri(uri, mimeType);
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [
+      videoPart,
+      `この動画を視聴し、場面が切り替わったタイミング（秒数）のみを検出してください。
+
+【重要：分割しないケース】
+- 同じ人物・同じ場所・同じ構図・同じカメラアングルが続く = 1シーン（分割しない）
+- 表情の変化、手の動き、テロップの出し方の変化だけ = 分割しない
+- 1秒ごとや数秒ごとの細かい分割は不要。同じカットが続いている限り1シーンとして扱う
+
+【分割するケース】
+- カット割り（明らかに別の映像に切り替わる）
+- カメラアングル・構図の大きな変更（アップ↔引き、横顔↔正面など）
+- 場所・背景の変化
+- 人物の出入り、別の人物への切り替え
+
+【その他】
+- 0秒（動画の開始）は必ず含める
+- 各シーンの代表フレームとして、切り替わり直後の秒数を返す（小数可: 5.2, 12.8）
+- 最大60シーンまで
+
+以下のJSON形式で出力してください:
+{ "timestamps": [0, 5.2, 12.3, ...] }`
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          timestamps: {
+            type: Type.ARRAY,
+            items: { type: Type.NUMBER },
+          },
+        },
+        required: ['timestamps'],
+      },
+    },
+  });
+
+  const result = JSON.parse(response.text!) as { timestamps: number[] };
+  let timestamps = result.timestamps ?? [];
+
+  // 0秒が含まれていなければ追加し、ソート・重複除去
+  const sorted = [...new Set([0, ...timestamps])].sort((a, b) => a - b);
+
+  // 最小間隔を強制：同じカットが続く場合の細かい分割を除去
+  const filtered: number[] = [];
+  for (const t of sorted) {
+    if (filtered.length === 0 || t - filtered[filtered.length - 1] >= MIN_SCENE_INTERVAL_SEC) {
+      filtered.push(t);
+    }
+  }
+  return filtered;
+};
+
 // シーンフレームの個別AI分析
 export const analyzeSceneFrames = async (
   scenes: SceneData[],

@@ -11,6 +11,8 @@ export interface ExtractionProgress {
   current: number;
   total: number;
   percentage: number;
+  phase?: 'detecting' | 'extracting';
+  status?: string;
 }
 
 const DEFAULT_OPTIONS: FrameExtractionOptions = {
@@ -98,6 +100,79 @@ export const extractFrames = async (
       current: i + 1,
       total: totalFrames,
       percentage: Math.round(((i + 1) / totalFrames) * 100),
+    });
+  }
+
+  return { frames, duration, videoObjectUrl };
+};
+
+/** 指定したタイムスタンプ（秒）の位置でフレームを抽出（LLM検出の場面切り替え用） */
+export const extractFramesAtTimestamps = async (
+  file: File,
+  timestamps: number[],
+  options: { quality?: number } = {},
+  onProgress?: (progress: ExtractionProgress) => void
+): Promise<{ frames: SceneData[]; duration: number; videoObjectUrl: string }> => {
+  const quality = options.quality ?? 0.8;
+  const videoObjectUrl = URL.createObjectURL(file);
+
+  const video = document.createElement('video');
+  video.preload = 'auto';
+  video.muted = true;
+  video.playsInline = true;
+  video.src = videoObjectUrl;
+
+  await waitForEvent(video, 'loadedmetadata');
+  if (video.readyState < 2) {
+    await waitForEvent(video, 'canplay');
+  }
+
+  const duration = video.duration;
+
+  // 動画の長さを超えるタイムスタンプを除外し、ソート
+  const validTimestamps = [...new Set(timestamps)]
+    .filter((t) => t >= 0 && t < duration)
+    .sort((a, b) => a - b);
+
+  if (validTimestamps.length === 0) {
+    // フォールバック: 0秒のみ
+    validTimestamps.push(0);
+  }
+
+  const videoWidth = video.videoWidth;
+  const videoHeight = video.videoHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = videoWidth;
+  canvas.height = videoHeight;
+  const ctx = canvas.getContext('2d')!;
+
+  const frames: SceneData[] = [];
+
+  for (let i = 0; i < validTimestamps.length; i++) {
+    const timestamp = validTimestamps[i];
+    video.currentTime = timestamp;
+    await waitForEvent(video, 'seeked');
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+    const thumbnailDataUrl = canvas.toDataURL('image/jpeg', quality);
+
+    frames.push({
+      id: `scene_${i}_${Math.random().toString(36).substr(2, 6)}`,
+      sceneNumber: i + 1,
+      timestamp,
+      timestampFormatted: formatTimestamp(timestamp),
+      thumbnailDataUrl,
+      isSelected: false,
+      analysis: null,
+      analysisStatus: 'pending',
+    });
+
+    onProgress?.({
+      current: i + 1,
+      total: validTimestamps.length,
+      percentage: Math.round(((i + 1) / validTimestamps.length) * 100),
+      phase: 'extracting',
     });
   }
 

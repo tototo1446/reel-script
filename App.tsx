@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
-import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames } from './services/geminiService';
+import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames, detectSceneChangeTimestamps } from './services/geminiService';
 import { ScriptViewer } from './components/ScriptViewer';
 import { SceneUploader } from './components/SceneUploader';
 import { SceneHeader } from './components/SceneHeader';
@@ -10,8 +10,9 @@ import { SceneToolbar } from './components/SceneToolbar';
 import { SceneGrid } from './components/SceneGrid';
 import { VideoPreviewModal } from './components/VideoPreviewModal';
 import { AnalysisProgressCard } from './components/AnalysisProgressCard';
+import { SessionHistoryList, SessionHistoryItem } from './components/SessionHistoryList';
 import { useLocalStorage } from './hooks/useLocalStorage';
-import { extractFrames, ExtractionProgress } from './utils/videoFrameExtractor';
+import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
 import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -46,7 +47,8 @@ const App: React.FC = () => {
   const [isExtracting, setIsExtracting] = useState(false);
   const [supabaseSessionId, setSupabaseSessionId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [pastSessions, setPastSessions] = useState<{ id: string; video_file_name: string; total_scenes: number; analysis_status: string; created_at: string }[]>([]);
+  const [pastSessions, setPastSessions] = useState<SessionHistoryItem[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
@@ -108,10 +110,50 @@ const App: React.FC = () => {
     setExtractionProgress(null);
 
     try {
-      const { frames, duration, videoObjectUrl } = await extractFrames(
+      // Phase 1: LLMで場面切り替えのタイムスタンプを検出
+      setExtractionProgress({
+        current: 0,
+        total: 1,
+        percentage: 0,
+        phase: 'detecting',
+        status: 'AIが場面を検出中...',
+      });
+
+      let timestamps: number[];
+      try {
+        timestamps = await detectSceneChangeTimestamps(file, (status) =>
+          setExtractionProgress((p) => (p ? { ...p, status } : p))
+        );
+      } catch (detectErr) {
+        console.warn('場面検出に失敗、等間隔でフォールバック:', detectErr);
+        // フォールバック: 5秒間隔で抽出（重複を減らす）
+        const { duration } = await new Promise<{ duration: number }>((resolve, reject) => {
+          const url = URL.createObjectURL(file);
+          const v = document.createElement('video');
+          v.src = url;
+          v.onloadedmetadata = () => {
+            resolve({ duration: v.duration });
+            URL.revokeObjectURL(url);
+          };
+          v.onerror = () => reject(new Error('動画の読み込みに失敗'));
+        });
+        timestamps = [];
+        for (let t = 0; t < duration; t += 5) timestamps.push(t);
+        if (timestamps[timestamps.length - 1] !== duration - 0.1) {
+          timestamps.push(Math.max(0, duration - 0.5));
+        }
+      }
+
+      if (timestamps.length === 0) {
+        timestamps = [0];
+      }
+
+      // Phase 2: 検出したタイムスタンプでフレーム抽出
+      const { frames, duration, videoObjectUrl } = await extractFramesAtTimestamps(
         file,
-        { intervalSeconds: 1, maxFrames: 60, quality: 0.8 },
-        (progress) => setExtractionProgress(progress)
+        timestamps,
+        { quality: 0.8 },
+        (progress) => setExtractionProgress({ ...progress, phase: 'extracting' })
       );
 
       const session: SceneExtractionSession = {
@@ -247,6 +289,49 @@ const App: React.FC = () => {
       URL.revokeObjectURL(sceneSession.videoObjectUrl);
     }
     setSceneSession(null);
+    setSupabaseSessionId(null);
+  };
+
+  const handleLoadSessionFromHistory = async (session: SessionHistoryItem) => {
+    setIsLoadingHistory(true);
+    try {
+      const scenes = await fetchScenes(session.id);
+      const restored: SceneExtractionSession = {
+        id: session.id,
+        videoFileName: session.video_file_name,
+        videoFileSize: session.video_file_size ?? 0,
+        videoDuration: session.video_duration ?? 0,
+        videoObjectUrl: '', // 過去セッションは動画なし
+        scenes,
+        totalScenes: scenes.length,
+        extractionStatus: 'extracted',
+        analysisStatus: session.analysis_status as SceneExtractionSession['analysisStatus'],
+        analysisProgress: { current: scenes.length, total: scenes.length, percentage: 100 },
+        createdAt: session.created_at,
+      };
+      setSceneSession(restored);
+      setSupabaseSessionId(session.id);
+      setShowVideoPreview(false);
+    } catch (err) {
+      console.error('履歴の読み込みに失敗:', err);
+      alert('履歴の読み込みに失敗しました。');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const handleDeleteSessionFromHistory = async (sessionId: string) => {
+    try {
+      await deleteSessionFromSupabase(sessionId);
+      if (supabaseSessionId === sessionId) {
+        handleClearScenes();
+      }
+      const sessions = await fetchSessions();
+      setPastSessions(sessions);
+    } catch (err) {
+      console.error('削除に失敗:', err);
+      alert('削除に失敗しました。');
+    }
   };
 
   const handleDownloadScene = (scene: typeof sceneSession extends null ? never : NonNullable<typeof sceneSession>['scenes'][number]) => {
@@ -406,11 +491,19 @@ const App: React.FC = () => {
         {mode === 'ANALYSIS' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {!sceneSession ? (
-              <SceneUploader
-                onFileSelected={handleSceneExtraction}
-                isExtracting={isExtracting}
-                extractionProgress={extractionProgress}
-              />
+              <div className="flex flex-col items-center">
+                <SceneUploader
+                  onFileSelected={handleSceneExtraction}
+                  isExtracting={isExtracting}
+                  extractionProgress={extractionProgress}
+                />
+                <SessionHistoryList
+                  sessions={pastSessions}
+                  onLoadSession={handleLoadSessionFromHistory}
+                  onDeleteSession={handleDeleteSessionFromHistory}
+                  isLoading={isLoadingHistory}
+                />
+              </div>
             ) : (
               <>
                 {/* AI分析進捗 */}
@@ -425,8 +518,11 @@ const App: React.FC = () => {
                 {/* ヘッダー */}
                 <SceneHeader
                   totalScenes={sceneSession.totalScenes}
+                  videoFileName={sceneSession.videoFileName}
+                  hasVideo={!!sceneSession.videoObjectUrl}
                   onOpenVideoPreview={() => setShowVideoPreview(true)}
                   onStartAnalysis={handleStartSceneAnalysis}
+                  onBack={handleClearScenes}
                   isAnalyzing={sceneSession.analysisStatus === 'analyzing'}
                   analysisCompleted={sceneSession.analysisStatus === 'completed'}
                 />

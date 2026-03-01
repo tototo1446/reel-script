@@ -61,17 +61,22 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
 
         {/* Video Player */}
         <div className="p-4">
-          <div className="bg-black rounded-xl overflow-hidden flex items-center justify-center">
-            <video
-              ref={videoRef}
-              src={videoObjectUrl}
-              controls
-              className="max-h-[400px] w-auto mx-auto"
-              playsInline
-            />
+          <div className="bg-black rounded-xl overflow-hidden flex items-center justify-center min-h-[200px]">
+            {videoObjectUrl ? (
+              <video
+                ref={videoRef}
+                src={videoObjectUrl}
+                controls
+                className="max-h-[400px] w-auto mx-auto"
+                playsInline
+              />
+            ) : (
+              <p className="text-zinc-500 text-sm py-8">元動画は過去セッションでは利用できません</p>
+            )}
           </div>
 
           {/* Action buttons */}
+          {videoObjectUrl && (
           <div className="flex items-center justify-between mt-4">
             <button
               onClick={handlePlay}
@@ -92,8 +97,10 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
               動画をダウンロード
             </button>
           </div>
+          )}
 
-          {/* Scene Jump */}
+          {/* Scene Jump（動画がある場合のみ） */}
+          {videoObjectUrl && (
           <div className="mt-6">
             <h4 className="text-sm font-bold text-zinc-300 mb-3 flex items-center gap-2">
               <span>🚀</span>
@@ -111,6 +118,7 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
               ))}
             </div>
           </div>
+          )}
         </div>
       </div>
     </div>

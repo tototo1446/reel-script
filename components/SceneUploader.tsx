@@ -4,7 +4,13 @@ import React, { useState, useCallback } from 'react';
 interface SceneUploaderProps {
   onFileSelected: (file: File) => void;
   isExtracting: boolean;
-  extractionProgress: { current: number; total: number; percentage: number } | null;
+  extractionProgress: {
+    current: number;
+    total: number;
+    percentage: number;
+    phase?: 'detecting' | 'extracting';
+    status?: string;
+  } | null;
 }
 
 export const SceneUploader: React.FC<SceneUploaderProps> = ({ onFileSelected, isExtracting, extractionProgress }) => {
@@ -61,7 +67,11 @@ export const SceneUploader: React.FC<SceneUploaderProps> = ({ onFileSelected, is
       {isExtracting && extractionProgress ? (
         <div className="w-full max-w-lg glass p-8 rounded-2xl text-center">
           <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-white font-bold mb-2">シーンを抽出中...</p>
+          <p className="text-white font-bold mb-2">
+            {extractionProgress.phase === 'detecting'
+              ? (extractionProgress.status || 'AIが場面を検出中...')
+              : 'シーンを抽出中...'}
+          </p>
           <div className="w-full bg-zinc-800 rounded-full h-2 mb-2">
             <div
               className="bg-gradient-to-r from-blue-500 to-cyan-400 h-2 rounded-full transition-all duration-300"
@@ -69,7 +79,9 @@ export const SceneUploader: React.FC<SceneUploaderProps> = ({ onFileSelected, is
             ></div>
           </div>
           <p className="text-zinc-400 text-xs">
-            {extractionProgress.current} / {extractionProgress.total} フレーム ({extractionProgress.percentage}%)
+            {extractionProgress.phase === 'detecting'
+              ? '動画を分析しています...'
+              : `${extractionProgress.current} / ${extractionProgress.total} シーン (${extractionProgress.percentage}%)`}
           </p>
         </div>
       ) : (
