@@ -274,8 +274,8 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
-/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする（テロップ細分割のため1秒に設定） */
-const MIN_SCENE_INTERVAL_SEC = 1;
+/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする（テロップ細分割のため0.8秒に設定） */
+const MIN_SCENE_INTERVAL_SEC = 0.8;
 
 /** 動画の長さ（秒）を取得 */
 const getVideoDuration = (file: File): Promise<number> =>
@@ -311,8 +311,8 @@ export const detectSceneChangeTimestamps = async (
       `この動画を視聴し、場面が切り替わったタイミング（秒数）を漏れなく検出してください。1つでも見落としがあれば不十分です。
 
 【検出の基本】
-- 動画を頭から順に確認し、以下の変化が起きたタイミングをすべて列挙する
-- 検出しすぎるくらいでよい。疑わしい場合も含める
+- 動画を頭から順に一時停止しながら確認し、以下の変化が起きたタイミングをすべて列挙する
+- 検出しすぎるくらいでよい。疑わしい場合も含める。取りこぼしのないよう細かく検出する
 - 0秒（動画の開始）は必ず含める
 
 【分割するケース】※これらは必ず検出する
@@ -320,7 +320,7 @@ export const detectSceneChangeTimestamps = async (
 - カメラアングル・構図の変更（アップ↔引き、横顔↔正面、クローズアップ、製品のアップなど）
 - 場所・背景の変化（例：部屋→洗面所）
 - 人物の出入り、別の人物への切り替え
-- テロップ・キャプションの内容の切り替え（テキストが1つ変わるたびに必ず検出。「ねぇ」「みたいなの ある？」「コレだけ使ってりゃいい！」「泡立てかた」「保湿ケアを」など、表示されるテロップごとに新シーンとして検出）
+- テロップ・キャプションの内容の切り替え（テキストが変わるたびに必ず検出。「ねぇ」「ドラッグストアよく見ない？」「コレだけ使ってりゃいい！」「コレしか勝たん」「ニキビケア」「ゴシゴシ厳禁」「さっぱりタイプ」など、表示されるテロップ1つ1つを漏れなく新シーンとして検出。連続する短いテロップもすべて検出する）
 - 製品・アイテムの切り替え（手に持つものが変わる、紹介する商品が変わる）
 
 【分割しないケース】
@@ -328,7 +328,7 @@ export const detectSceneChangeTimestamps = async (
 - 表情の変化、手の動きだけ（テロップ・製品に変化がない場合）= 分割しない
 
 【目安】
-- 60秒の動画なら通常15〜35シーン程度。テロップが多い動画ではさらに多くなる。少なすぎる場合は見落としを疑う
+- 60秒の動画なら通常20〜40シーン程度。テロップが頻繁に変わる動画では50シーン以上になることもある。少なすぎる場合は見落としを疑う
 
 【その他】
 - 各シーンの代表フレームとして、切り替わり直後の秒数を返す（小数可: 5.2, 12.8）
@@ -370,11 +370,11 @@ export const detectSceneChangeTimestamps = async (
   try {
     const duration = await getVideoDuration(file);
     const scenesPerMinute = duration > 0 ? filtered.length / (duration / 60) : 0;
-    if (duration > 20 && scenesPerMinute < 8) {
-      const supplementInterval = 4;
+    if (duration > 15 && scenesPerMinute < 15) {
+      const supplementInterval = 3;
       const supplemented: number[] = [...filtered];
       for (let t = supplementInterval; t < duration - 1; t += supplementInterval) {
-        const nearExisting = supplemented.some((existing) => Math.abs(existing - t) < 2.5);
+        const nearExisting = supplemented.some((existing) => Math.abs(existing - t) < 2);
         if (!nearExisting) supplemented.push(t);
       }
       supplemented.sort((a, b) => a - b);
