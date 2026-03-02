@@ -1,42 +1,129 @@
 /**
  * フレーム差分によるカット検出（LLM不要・トークン節約・高速）
- * 明確なカット割り（映像の切り替わり）のみを検出。テロップ変化は検出しない。
+ * 3つのメトリクスを併用して高精度にシーン変化を検出:
+ *   1. グローバル平均差分 — 明確なカット割り
+ *   2. ブロック分割MAX差分 — テロップ出現等の局所変化
+ *   3. カラーヒストグラム距離 — 色調変化・照明変化
  */
 
 const waitForEvent = (el: HTMLVideoElement, ev: string): Promise<void> =>
   new Promise((r) => el.addEventListener(ev, () => r(), { once: true }));
 
 /** 2フレーム間の平均絶対差分（グレースケール、0-255） */
-function computeFrameDiff(img1: ImageData, img2: ImageData): number {
-  const d = img1.data;
+function computeGlobalDiff(img1: ImageData, img2: ImageData): number {
+  const d1 = img1.data;
   const d2 = img2.data;
   let sum = 0;
-  const step = 4; // RGBA、全ピクセルだと重いので間引く場合: step=8 など
-  for (let i = 0; i < d.length; i += step) {
-    const g1 = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  const step = 4;
+  for (let i = 0; i < d1.length; i += step) {
+    const g1 = 0.299 * d1[i] + 0.587 * d1[i + 1] + 0.114 * d1[i + 2];
     const g2 = 0.299 * d2[i] + 0.587 * d2[i + 1] + 0.114 * d2[i + 2];
     sum += Math.abs(g1 - g2);
   }
-  return sum / (d.length / step);
+  return sum / (d1.length / step);
 }
 
-/** フレーム差分でカット検出。明確なカット割りのみ検出（テロップ変化は検出しない） */
+/** ブロック分割MAX差分 — フレームをグリッドに分割し、最大ブロック差分を返す */
+function computeBlockMaxDiff(
+  img1: ImageData, img2: ImageData,
+  w: number, h: number, gridSize: number
+): number {
+  const d1 = img1.data;
+  const d2 = img2.data;
+  const bw = Math.ceil(w / gridSize);
+  const bh = Math.ceil(h / gridSize);
+  let maxBlockDiff = 0;
+
+  for (let by = 0; by < gridSize; by++) {
+    for (let bx = 0; bx < gridSize; bx++) {
+      let blockSum = 0;
+      let blockCount = 0;
+      const startY = by * bh;
+      const endY = Math.min(startY + bh, h);
+      const startX = bx * bw;
+      const endX = Math.min(startX + bw, w);
+
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
+          const idx = (y * w + x) * 4;
+          const g1 = 0.299 * d1[idx] + 0.587 * d1[idx + 1] + 0.114 * d1[idx + 2];
+          const g2 = 0.299 * d2[idx] + 0.587 * d2[idx + 1] + 0.114 * d2[idx + 2];
+          blockSum += Math.abs(g1 - g2);
+          blockCount++;
+        }
+      }
+      if (blockCount > 0) {
+        maxBlockDiff = Math.max(maxBlockDiff, blockSum / blockCount);
+      }
+    }
+  }
+  return maxBlockDiff;
+}
+
+/** カラーヒストグラム距離（RGB各チャンネル32ビン、バタチャリヤ距離） */
+function computeHistogramDist(img1: ImageData, img2: ImageData): number {
+  const bins = 32;
+  const binSize = 256 / bins;
+  const hist1R = new Float32Array(bins);
+  const hist1G = new Float32Array(bins);
+  const hist1B = new Float32Array(bins);
+  const hist2R = new Float32Array(bins);
+  const hist2G = new Float32Array(bins);
+  const hist2B = new Float32Array(bins);
+  const d1 = img1.data;
+  const d2 = img2.data;
+  const pixelCount = d1.length / 4;
+
+  for (let i = 0; i < d1.length; i += 4) {
+    const b1r = Math.min(bins - 1, (d1[i] / binSize) | 0);
+    const b1g = Math.min(bins - 1, (d1[i + 1] / binSize) | 0);
+    const b1b = Math.min(bins - 1, (d1[i + 2] / binSize) | 0);
+    const b2r = Math.min(bins - 1, (d2[i] / binSize) | 0);
+    const b2g = Math.min(bins - 1, (d2[i + 1] / binSize) | 0);
+    const b2b = Math.min(bins - 1, (d2[i + 2] / binSize) | 0);
+    hist1R[b1r]++; hist1G[b1g]++; hist1B[b1b]++;
+    hist2R[b2r]++; hist2G[b2g]++; hist2B[b2b]++;
+  }
+
+  // 正規化してバタチャリヤ係数を計算
+  let bc = 0;
+  for (let ch = 0; ch < 3; ch++) {
+    const h1 = ch === 0 ? hist1R : ch === 1 ? hist1G : hist1B;
+    const h2 = ch === 0 ? hist2R : ch === 1 ? hist2G : hist2B;
+    let channelBc = 0;
+    for (let b = 0; b < bins; b++) {
+      channelBc += Math.sqrt((h1[b] / pixelCount) * (h2[b] / pixelCount));
+    }
+    bc += channelBc;
+  }
+  bc /= 3;
+
+  // バタチャリヤ距離 (0=同一, 1=完全に異なる)
+  return Math.sqrt(Math.max(0, 1 - bc));
+}
+
+/** 統計的閾値を計算 */
+function computeStatThreshold(values: number[], sigma: number): number {
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, d) => a + (d - mean) ** 2, 0) / values.length;
+  return mean + sigma * Math.sqrt(variance);
+}
+
+/** フレーム差分でカット検出（3メトリクス併用・高精度） */
 export const detectCutTimestampsByFrameDiff = async (
   file: File,
   options: {
     intervalSec?: number;
     maxFrames?: number;
-    /** 差分閾値（未指定時は統計的閾値: 平均 + thresholdSigma * 標準偏差） */
     thresholdSigma?: number;
-    /** 最小カット間隔（秒） */
     minCutIntervalSec?: number;
   } = {},
   onProgress?: (status: string) => void
 ): Promise<number[]> => {
-  const intervalSec = options.intervalSec ?? 0.5;
-  const maxFrames = options.maxFrames ?? 400;
-  const thresholdSigma = options.thresholdSigma ?? 2.5;
-  const minCutIntervalSec = options.minCutIntervalSec ?? 1;
+  const intervalSec = options.intervalSec ?? 0.3;
+  const maxFrames = options.maxFrames ?? 600;
+  const thresholdSigma = options.thresholdSigma ?? 1.8;
+  const minCutIntervalSec = options.minCutIntervalSec ?? 0.5;
 
   const url = URL.createObjectURL(file);
   const video = document.createElement('video');
@@ -58,8 +145,8 @@ export const detectCutTimestampsByFrameDiff = async (
   }
   if (timestamps.length === 0) timestamps.push(0);
 
-  // 解像度を下げて高速化（幅160程度）
-  const scale = Math.min(1, 160 / video.videoWidth);
+  // 解像度: 幅256pxでテロップも捉える
+  const scale = Math.min(1, 256 / video.videoWidth);
   const w = Math.max(1, Math.floor(video.videoWidth * scale));
   const h = Math.max(1, Math.floor(video.videoHeight * scale));
 
@@ -83,27 +170,45 @@ export const detectCutTimestampsByFrameDiff = async (
 
   if (imageDataList.length < 2) return [0];
 
-  // 差分を計算
-  const diffs: number[] = [];
+  // 3メトリクスを計算
+  const globalDiffs: number[] = [];
+  const blockMaxDiffs: number[] = [];
+  const histDists: number[] = [];
+  const GRID_SIZE = 8;
+
+  onProgress?.('シーン変化を解析中...');
   for (let i = 1; i < imageDataList.length; i++) {
-    diffs.push(computeFrameDiff(imageDataList[i - 1].data, imageDataList[i].data));
+    const prev = imageDataList[i - 1].data;
+    const curr = imageDataList[i].data;
+    globalDiffs.push(computeGlobalDiff(prev, curr));
+    blockMaxDiffs.push(computeBlockMaxDiff(prev, curr, w, h, GRID_SIZE));
+    histDists.push(computeHistogramDist(prev, curr));
   }
 
-  // 統計的閾値: 平均 + thresholdSigma * 標準偏差
-  const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-  const variance = diffs.reduce((a, d) => a + (d - mean) ** 2, 0) / diffs.length;
-  const std = Math.sqrt(variance);
-  const threshold = mean + thresholdSigma * std;
+  // 各メトリクスの統計的閾値
+  const globalThreshold = computeStatThreshold(globalDiffs, thresholdSigma);
+  const blockThreshold = computeStatThreshold(blockMaxDiffs, thresholdSigma);
+  const histThreshold = computeStatThreshold(histDists, thresholdSigma);
 
-  if (std < 1) return [0]; // ほぼ変化がない動画
+  // いずれかのメトリクスが閾値超えならカットと判定
+  const cutSet = new Set<number>();
+  for (let i = 0; i < globalDiffs.length; i++) {
+    if (
+      globalDiffs[i] >= globalThreshold ||
+      blockMaxDiffs[i] >= blockThreshold ||
+      histDists[i] >= histThreshold
+    ) {
+      cutSet.add(i);
+    }
+  }
 
+  // 最小間隔フィルタ
   const cutTimestamps: number[] = [0];
-  for (let i = 0; i < diffs.length; i++) {
-    if (diffs[i] >= threshold) {
-      const cut = imageDataList[i + 1].timestamp;
-      if (cut - cutTimestamps[cutTimestamps.length - 1] >= minCutIntervalSec) {
-        cutTimestamps.push(cut);
-      }
+  const sortedIndices = [...cutSet].sort((a, b) => a - b);
+  for (const i of sortedIndices) {
+    const cut = imageDataList[i + 1].timestamp;
+    if (cut - cutTimestamps[cutTimestamps.length - 1] >= minCutIntervalSec) {
+      cutTimestamps.push(cut);
     }
   }
 
