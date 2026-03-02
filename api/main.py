@@ -29,14 +29,14 @@ def health():
 async def detect_scenes(
     file: UploadFile = File(...),
     detector: str = "reel",
-    threshold: float = 16.0,
-    min_scene_len: int = 8,
+    threshold: float = 11.0,
+    min_scene_len: int = 5,
 ):
     """
     動画からカット検出し、タイムスタンプ（秒）のリストを返す。
     - detector: "reel" (デュアル検出・高感度) / "content" / "adaptive"
-    - threshold: 閾値（content用、デフォルト16）
-    - min_scene_len: 最小シーン長（フレーム数、デフォルト8≒30fpsで約0.27秒）
+    - threshold: 閾値（content用、デフォルト11）
+    - min_scene_len: 最小シーン長（フレーム数、デフォルト5≒30fpsで約0.17秒）
     """
     if not file.content_type or not file.content_type.startswith("video/"):
         raise HTTPException(400, "動画ファイルをアップロードしてください")
@@ -56,9 +56,9 @@ async def detect_scenes(
             adaptive_scenes = detect(
                 tmp_path,
                 AdaptiveDetector(
-                    adaptive_threshold=2.5,
+                    adaptive_threshold=1.8,
                     min_scene_len=min_scene_len,
-                    min_content_val=12.0,
+                    min_content_val=8.0,
                 ),
             )
             # 両方のタイムスタンプをマージ
@@ -68,11 +68,11 @@ async def detect_scenes(
                     sec = start.get_seconds()
                     if sec > 0:
                         raw_timestamps.add(round(sec, 2))
-            # ソートして 0.3秒未満の近接をフィルタ
+            # ソートして 0.2秒未満の近接をフィルタ
             sorted_ts = sorted(raw_timestamps)
             timestamps = [0.0]
             for ts in sorted_ts:
-                if ts - timestamps[-1] >= 0.3:
+                if ts - timestamps[-1] >= 0.2:
                     timestamps.append(ts)
         elif detector == "adaptive":
             scene_list = detect(tmp_path, AdaptiveDetector())
