@@ -45,7 +45,7 @@ export const detectSceneTimestamps = async (
     onProgress?.('フレーム差分でカットを検出中...');
     return detectCutTimestampsByFrameDiff(
       file,
-      { intervalSec: 0.3, maxFrames: 600, thresholdSigma: 1.8, minCutIntervalSec: 0.5 },
+      { intervalSec: 0.2, maxFrames: 800, thresholdSigma: 1.5, minCutIntervalSec: 0.3 },
       onProgress
     );
   }

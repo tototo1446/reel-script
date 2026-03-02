@@ -102,14 +102,38 @@ function computeHistogramDist(img1: ImageData, img2: ImageData): number {
   return Math.sqrt(Math.max(0, 1 - bc));
 }
 
-/** 統計的閾値を計算 */
+/** 統計的閾値を計算 (mean + sigma * std) */
 function computeStatThreshold(values: number[], sigma: number): number {
   const mean = values.reduce((a, b) => a + b, 0) / values.length;
   const variance = values.reduce((a, d) => a + (d - mean) ** 2, 0) / values.length;
   return mean + sigma * Math.sqrt(variance);
 }
 
-/** フレーム差分でカット検出（3メトリクス併用・高精度） */
+/** パーセンタイル値を計算 (0-1) */
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.floor(sorted.length * p);
+  return sorted[Math.min(idx, sorted.length - 1)];
+}
+
+/** ローカルスパイク検出 — スライディングウィンドウ内の中央値の倍率でスパイクを判定 */
+function detectLocalSpikes(values: number[], windowSize: number, spikeRatio: number): Set<number> {
+  const spikes = new Set<number>();
+  const half = Math.floor(windowSize / 2);
+  for (let i = 0; i < values.length; i++) {
+    const start = Math.max(0, i - half);
+    const end = Math.min(values.length, i + half + 1);
+    const window = values.slice(start, end).sort((a, b) => a - b);
+    const localMedian = window[Math.floor(window.length / 2)];
+    // 局所中央値の spikeRatio 倍以上なら局所スパイク
+    if (localMedian > 0 && values[i] >= localMedian * spikeRatio) {
+      spikes.add(i);
+    }
+  }
+  return spikes;
+}
+
+/** フレーム差分でカット検出（3メトリクス + ローカルスパイク + パーセンタイル併用） */
 export const detectCutTimestampsByFrameDiff = async (
   file: File,
   options: {
@@ -120,10 +144,10 @@ export const detectCutTimestampsByFrameDiff = async (
   } = {},
   onProgress?: (status: string) => void
 ): Promise<number[]> => {
-  const intervalSec = options.intervalSec ?? 0.3;
-  const maxFrames = options.maxFrames ?? 600;
-  const thresholdSigma = options.thresholdSigma ?? 1.8;
-  const minCutIntervalSec = options.minCutIntervalSec ?? 0.5;
+  const intervalSec = options.intervalSec ?? 0.2;
+  const maxFrames = options.maxFrames ?? 800;
+  const thresholdSigma = options.thresholdSigma ?? 1.5;
+  const minCutIntervalSec = options.minCutIntervalSec ?? 0.3;
 
   const url = URL.createObjectURL(file);
   const video = document.createElement('video');
@@ -185,12 +209,11 @@ export const detectCutTimestampsByFrameDiff = async (
     histDists.push(computeHistogramDist(prev, curr));
   }
 
-  // 各メトリクスの統計的閾値
+  // --- 検出手法1: グローバル統計的閾値 (mean + sigma * std) ---
   const globalThreshold = computeStatThreshold(globalDiffs, thresholdSigma);
   const blockThreshold = computeStatThreshold(blockMaxDiffs, thresholdSigma);
   const histThreshold = computeStatThreshold(histDists, thresholdSigma);
 
-  // いずれかのメトリクスが閾値超えならカットと判定
   const cutSet = new Set<number>();
   for (let i = 0; i < globalDiffs.length; i++) {
     if (
@@ -201,6 +224,30 @@ export const detectCutTimestampsByFrameDiff = async (
       cutSet.add(i);
     }
   }
+
+  // --- 検出手法2: パーセンタイル閾値 (上位15%を自動的にカット候補) ---
+  const globalP85 = percentile(globalDiffs, 0.85);
+  const blockP85 = percentile(blockMaxDiffs, 0.85);
+  const histP85 = percentile(histDists, 0.85);
+  for (let i = 0; i < globalDiffs.length; i++) {
+    if (
+      globalDiffs[i] >= globalP85 ||
+      blockMaxDiffs[i] >= blockP85 ||
+      histDists[i] >= histP85
+    ) {
+      cutSet.add(i);
+    }
+  }
+
+  // --- 検出手法3: ローカルスパイク検出 (局所的な急変) ---
+  const SPIKE_WINDOW = 9;
+  const SPIKE_RATIO = 2.0;
+  const globalSpikes = detectLocalSpikes(globalDiffs, SPIKE_WINDOW, SPIKE_RATIO);
+  const blockSpikes = detectLocalSpikes(blockMaxDiffs, SPIKE_WINDOW, SPIKE_RATIO);
+  const histSpikes = detectLocalSpikes(histDists, SPIKE_WINDOW, SPIKE_RATIO);
+  for (const spike of globalSpikes) cutSet.add(spike);
+  for (const spike of blockSpikes) cutSet.add(spike);
+  for (const spike of histSpikes) cutSet.add(spike);
 
   // 最小間隔フィルタ
   const cutTimestamps: number[] = [0];
