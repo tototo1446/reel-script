@@ -127,7 +127,7 @@ const App: React.FC = () => {
         );
       } catch (detectErr) {
         console.warn('場面検出に失敗、等間隔でフォールバック:', detectErr);
-        // フォールバック: 5秒間隔で抽出（重複を減らす）
+        // フォールバック: 3秒間隔で抽出（重複を減らす）
         const { duration } = await new Promise<{ duration: number }>((resolve, reject) => {
           const url = URL.createObjectURL(file);
           const v = document.createElement('video');
@@ -139,7 +139,7 @@ const App: React.FC = () => {
           v.onerror = () => reject(new Error('動画の読み込みに失敗'));
         });
         timestamps = [];
-        for (let t = 0; t < duration; t += 5) timestamps.push(t);
+        for (let t = 0; t < duration; t += 3) timestamps.push(t);
         if (timestamps[timestamps.length - 1] !== duration - 0.1) {
           timestamps.push(Math.max(0, duration - 0.5));
         }

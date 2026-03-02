@@ -18,7 +18,7 @@ export const detectScenesViaPythonApi = async (
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await fetch(`${SCENE_API_URL}/detect-scenes`, {
+  const res = await fetch(`${SCENE_API_URL}/detect-scenes?detector=reel`, {
     method: 'POST',
     body: formData,
   });
@@ -45,7 +45,7 @@ export const detectSceneTimestamps = async (
     onProgress?.('フレーム差分でカットを検出中...');
     return detectCutTimestampsByFrameDiff(
       file,
-      { intervalSec: 0.5, maxFrames: 400, thresholdSigma: 2.5, minCutIntervalSec: 1 },
+      { intervalSec: 0.3, maxFrames: 600, thresholdSigma: 1.8, minCutIntervalSec: 0.5 },
       onProgress
     );
   }

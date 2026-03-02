@@ -28,15 +28,15 @@ def health():
 @app.post("/detect-scenes")
 async def detect_scenes(
     file: UploadFile = File(...),
-    detector: str = "content",
-    threshold: float = 27.0,
-    min_scene_len: int = 15,
+    detector: str = "reel",
+    threshold: float = 16.0,
+    min_scene_len: int = 8,
 ):
     """
     動画からカット検出し、タイムスタンプ（秒）のリストを返す。
-    - detector: "content" (高速) or "adaptive" (カメラ動きに強い)
-    - threshold: 閾値（content用、デフォルト27）
-    - min_scene_len: 最小シーン長（フレーム数）
+    - detector: "reel" (デュアル検出・高感度) / "content" / "adaptive"
+    - threshold: 閾値（content用、デフォルト16）
+    - min_scene_len: 最小シーン長（フレーム数、デフォルト8≒30fpsで約0.27秒）
     """
     if not file.content_type or not file.content_type.startswith("video/"):
         raise HTTPException(400, "動画ファイルをアップロードしてください")
@@ -47,19 +47,50 @@ async def detect_scenes(
         tmp_path = tmp.name
 
     try:
-        if detector == "adaptive":
+        if detector == "reel":
+            # デュアルディテクタ: ContentDetector + AdaptiveDetector の結果をマージ
+            content_scenes = detect(
+                tmp_path,
+                ContentDetector(threshold=threshold, min_scene_len=min_scene_len),
+            )
+            adaptive_scenes = detect(
+                tmp_path,
+                AdaptiveDetector(
+                    adaptive_threshold=2.5,
+                    min_scene_len=min_scene_len,
+                    min_content_val=12.0,
+                ),
+            )
+            # 両方のタイムスタンプをマージ
+            raw_timestamps: set[float] = set()
+            for scene_list in (content_scenes, adaptive_scenes):
+                for start, _end in scene_list:
+                    sec = start.get_seconds()
+                    if sec > 0:
+                        raw_timestamps.add(round(sec, 2))
+            # ソートして 0.3秒未満の近接をフィルタ
+            sorted_ts = sorted(raw_timestamps)
+            timestamps = [0.0]
+            for ts in sorted_ts:
+                if ts - timestamps[-1] >= 0.3:
+                    timestamps.append(ts)
+        elif detector == "adaptive":
             scene_list = detect(tmp_path, AdaptiveDetector())
+            timestamps = [0.0]
+            for start, _end in scene_list:
+                start_sec = start.get_seconds()
+                if start_sec > 0 and (not timestamps or start_sec - timestamps[-1] >= 0.3):
+                    timestamps.append(round(start_sec, 2))
         else:
             scene_list = detect(
                 tmp_path,
                 ContentDetector(threshold=threshold, min_scene_len=min_scene_len),
             )
-
-        timestamps = [0.0]
-        for start, end in scene_list:
-            start_sec = start.get_seconds()
-            if start_sec > 0 and (not timestamps or start_sec - timestamps[-1] >= 0.5):
-                timestamps.append(round(start_sec, 2))
+            timestamps = [0.0]
+            for start, _end in scene_list:
+                start_sec = start.get_seconds()
+                if start_sec > 0 and (not timestamps or start_sec - timestamps[-1] >= 0.3):
+                    timestamps.append(round(start_sec, 2))
 
         return {"timestamps": sorted(set(timestamps))}
     finally:
