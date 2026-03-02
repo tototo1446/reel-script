@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
-import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames, detectSceneChangeTimestamps } from './services/geminiService';
+import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames } from './services/geminiService';
+import { detectSceneTimestamps } from './services/sceneDetectionService';
 import { ScriptViewer } from './components/ScriptViewer';
 import { SceneUploader } from './components/SceneUploader';
 import { SceneHeader } from './components/SceneHeader';
@@ -110,18 +111,18 @@ const App: React.FC = () => {
     setExtractionProgress(null);
 
     try {
-      // Phase 1: LLMで場面切り替えのタイムスタンプを検出
+      // Phase 1: Python/コードでカット検出（分析はGemini 2.5 Flashで後段で実行）
       setExtractionProgress({
         current: 0,
         total: 1,
         percentage: 0,
         phase: 'detecting',
-        status: 'AIが場面を検出中...',
+        status: 'カットを検出中...',
       });
 
       let timestamps: number[];
       try {
-        timestamps = await detectSceneChangeTimestamps(file, (status) =>
+        timestamps = await detectSceneTimestamps(file, (status) =>
           setExtractionProgress((p) => (p ? { ...p, status } : p))
         );
       } catch (detectErr) {

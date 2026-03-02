@@ -52,8 +52,11 @@ export const extractFramesAtFixedInterval = async (
   if (video.readyState < 2) await waitForEvent(video, 'canplay');
 
   const duration = video.duration;
+  // 動画全長をカバーするよう間隔を調整（maxFrames超過時は間隔を広げる）
+  const rawCount = Math.ceil(duration / intervalSec);
+  const actualInterval = rawCount > maxFrames ? duration / maxFrames : intervalSec;
   const timestamps: number[] = [];
-  for (let t = 0; t < duration && timestamps.length < maxFrames; t += intervalSec) {
+  for (let t = 0; t < duration && timestamps.length < maxFrames; t += actualInterval) {
     timestamps.push(Math.min(t, duration - 0.5));
   }
   if (timestamps.length === 0) timestamps.push(0);

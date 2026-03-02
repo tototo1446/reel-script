@@ -32,7 +32,12 @@
 
 ---
 
-# 分析結果の履歴保存・振り返り
+# シーン検出Python化・分析はFlash（2025-03-02）
+
+- [x] api/: PySceneDetectによるシーン検出API（FastAPI）
+- [x] sceneDetectionService: Python API優先、失敗時はJSフレーム差分でフォールバック
+- [x] geminiService: LLMシーン検出を削除、analyzeSceneFrames（Gemini 2.5 Flash）のみ残す
+
 
 ## 目的
 動画分析結果を履歴として保存し、過去セッションを振り返りやすくする

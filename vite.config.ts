@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.SUPABASE_URL': JSON.stringify(env.SUPABASE_URL),
         'process.env.SUPABASE_KEY': JSON.stringify(env.SUPABASE_KEY),
+        'process.env.SCENE_API_URL': JSON.stringify(env.SCENE_API_URL || 'http://localhost:8000'),
       },
       resolve: {
         alias: {

@@ -69,7 +69,7 @@ export const SceneUploader: React.FC<SceneUploaderProps> = ({ onFileSelected, is
           <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-white font-bold mb-2">
             {extractionProgress.phase === 'detecting'
-              ? (extractionProgress.status || 'AIが場面を検出中...')
+              ? (extractionProgress.status || 'カットを検出中...')
               : 'シーンを抽出中...'}
           </p>
           <div className="w-full bg-zinc-800 rounded-full h-2 mb-2">
@@ -80,7 +80,7 @@ export const SceneUploader: React.FC<SceneUploaderProps> = ({ onFileSelected, is
           </div>
           <p className="text-zinc-400 text-xs">
             {extractionProgress.phase === 'detecting'
-              ? '動画を分析しています...'
+              ? 'カットを検出しています...'
               : `${extractionProgress.current} / ${extractionProgress.total} シーン (${extractionProgress.percentage}%)`}
           </p>
         </div>
