@@ -275,8 +275,8 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
-/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする（テロップ細分割のため0.8秒に設定） */
-const MIN_SCENE_INTERVAL_SEC = 0.8;
+/** 場面切り替え検出時の最小間隔（秒）。これより短い間隔のタイムスタンプはマージする（1秒サンプリング対応で0.7秒に設定） */
+const MIN_SCENE_INTERVAL_SEC = 0.7;
 
 /** 動画の長さ（秒）を取得 */
 const getVideoDuration = (file: File): Promise<number> =>
@@ -310,14 +310,38 @@ const detectSceneChangeFromFrames = async (
 
     onProgress?.(`フレームを分析中 (${b + 1}/${batches})...`);
 
-    const parts: unknown[] = batch.map((f) => ({
-      inlineData: {
-        mimeType: 'image/jpeg' as const,
-        data: f.dataUrl.split(',')[1],
-      },
-    }));
+    // バッチ境界の見落とし防止: 前バッチの最終フレームを先頭に追加して連続性を確保
+    const prevFrame = b > 0 ? frames[start - 1] : null;
+    const parts: unknown[] = [];
+    if (prevFrame) {
+      parts.push({
+        inlineData: {
+          mimeType: 'image/jpeg' as const,
+          data: prevFrame.dataUrl.split(',')[1],
+        },
+      });
+    }
+    batch.forEach((f) =>
+      parts.push({
+        inlineData: {
+          mimeType: 'image/jpeg' as const,
+          data: f.dataUrl.split(',')[1],
+        },
+      })
+    );
+    const frameDesc = prevFrame
+      ? `1枚目は前区間の最終フレーム（参考）。2枚目以降が${batchTimestamps.join(', ')}秒のフレームです。2枚目から順に前のフレームと比べて`
+      : `これらは動画の${batchTimestamps.join(', ')}秒のフレームです。1枚目から順に前のフレームと比べて`;
     parts.push({
-      text: `以下の${batch.length}枚の画像は、動画の${batchTimestamps.join(', ')}秒のフレームです。1枚目から順に見て、前のフレームと比べてテロップの内容・カット・構図・製品が変わったフレームの秒数をすべて返してください。0秒（1枚目）が含まれるバッチの場合は0を必ず含める。JSON形式: { "timestamps": [0, 1.5, 3, ...] }`,
+      text: `${frameDesc}、以下のいずれかが変わったフレームの秒数をすべて返してください。
+
+【検出対象】
+- テロップ・キャプションの内容（「みたいなの ある？」「ニキビ予防」「肌荒れケアできる」など、表示テキストが変わるたびに検出）
+- 製品パッケージ・ラベルのオーバーレイ・挿入画像が表示され始めたタイミング
+- カット割り・カメラアングル・構図の変更
+- 手に持つ製品の切り替え
+
+疑わしい場合も含める。0秒が含まれる場合は0を必ず含める。JSON形式: { "timestamps": [0, 1, 2, ...] }`,
     });
 
     const response = await ai.models.generateContent({
@@ -388,8 +412,8 @@ export const detectSceneChangeTimestamps = async (
   try {
     frames = await extractFramesAtFixedInterval(
       file,
-      1.5,
-      { quality: 0.8, maxFrames: 80 },
+      1,
+      { quality: 0.8, maxFrames: 100 },
       (cur, total) => onProgress?.(`フレームを抽出中 (${cur}/${total})...`)
     );
   } catch (err) {
@@ -433,10 +457,10 @@ async function applyMinIntervalFilter(sorted: number[], file: File): Promise<num
     const scenesPerMinute = filtered.length / (duration / 60);
     if (scenesPerMinute >= 15) return filtered;
 
-    const supplementInterval = 2.5;
+    const supplementInterval = 2;
     const supplemented = [...filtered];
     for (let t = supplementInterval; t < duration - 1; t += supplementInterval) {
-      if (!supplemented.some((e) => Math.abs(e - t) < 1.5)) supplemented.push(t);
+      if (!supplemented.some((e) => Math.abs(e - t) < 1.2)) supplemented.push(t);
     }
     supplemented.sort((a, b) => a - b);
     const merged: number[] = [];
