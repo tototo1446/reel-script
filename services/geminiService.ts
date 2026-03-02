@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, createPartFromUri, FileState, Chat } from "@google/genai";
-import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis } from "../types";
+import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis, SceneReferenceData } from "../types";
 import { DEFAULT_PATTERNS } from "../constants";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
@@ -114,13 +114,40 @@ JSON形式で出力してください。`
   return JSON.parse(response.text!);
 };
 
+// シーン参照データをトリミング（1セッションあたり最大30シーン: 冒頭10 + 中盤10 + 終盤10）
+const trimScenes = (scenes: SceneReferenceData['scenes']): SceneReferenceData['scenes'] => {
+  if (scenes.length <= 30) return scenes;
+  const head = scenes.slice(0, 10);
+  const midStart = Math.floor((scenes.length - 10) / 2);
+  const mid = scenes.slice(midStart, midStart + 10);
+  const tail = scenes.slice(-10);
+  return [...head, ...mid, ...tail];
+};
+
+// シーン参照データからプロンプトコンテキストを生成
+const buildSceneReferenceContext = (refs: SceneReferenceData[]): string => {
+  if (refs.length === 0) return '';
+
+  const blocks = refs.map((ref, i) => {
+    const trimmed = trimScenes(ref.scenes);
+    const lines = trimmed.map(s => {
+      const tags = s.tags.length > 0 ? ' ' + s.tags.join(' ') : '';
+      return `  [${s.timestampFormatted}] ${s.description}${tags}`;
+    });
+    return `--- 参考動画${i + 1}: ${ref.videoFileName} (${Math.round(ref.videoDuration)}秒, ${ref.scenes.length}シーン) ---\n${lines.join('\n')}`;
+  });
+
+  return `\n\n【参考動画のシーン構成フロー】\n${blocks.join('\n\n')}\n\n上記の参考動画のシーン展開のペース感、切り替えタイミング、視覚的な演出パターンを踏まえて台本を作成してください。`;
+};
+
 // 台本生成（パターン選択・フィードバック履歴対応）
 export const generateSmartScript = async (
   theme: string,
   tone: string,
   patterns: AnalysisData[],
   selectedPatternId?: string | null,
-  editHistory?: { instruction: string }[]
+  editHistory?: { instruction: string }[],
+  sceneReferences?: SceneReferenceData[]
 ): Promise<GeneratedScript> => {
   const patternContext = patterns
     .map(p => `[Pattern: ${p.title}] Hook: ${p.structure.hook}, Problem: ${p.structure.problem}, Solution: ${p.structure.solution}, CTA: ${p.structure.cta}, Camera: ${p.direction.camera}, Person: ${p.direction.person}, Caption: ${p.direction.caption}`)
@@ -134,6 +161,8 @@ export const generateSmartScript = async (
     ? `\n\n【ユーザーの好み（過去の修正履歴）】\n${editHistory.slice(-10).map(e => `- ${e.instruction}`).join('\n')}\n上記の傾向を反映して、ユーザー好みの台本を生成してください。`
     : '';
 
+  const sceneRefContext = sceneReferences ? buildSceneReferenceContext(sceneReferences) : '';
+
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: `あなたはSNS動画マーケティングのプロです。
@@ -143,6 +172,7 @@ export const generateSmartScript = async (
     ${patternContext}
     ${selectedPatternNote}
     ${feedbackContext}
+    ${sceneRefContext}
 
     【出力ルール】
     - 構成・流れ・テンポは参考パターンを維持する

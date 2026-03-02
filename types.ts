@@ -102,3 +102,15 @@ export interface SceneExtractionSession {
 }
 
 export type SceneViewMode = 'grid' | 'carousel';
+
+export interface SceneReferenceData {
+  sessionId: string;
+  videoFileName: string;
+  videoDuration: number;
+  scenes: {
+    sceneNumber: number;
+    timestampFormatted: string;
+    description: string;
+    tags: string[];
+  }[];
+}

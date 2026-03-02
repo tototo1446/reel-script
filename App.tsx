@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis } from './types';
+import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis, SceneReferenceData } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
 import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames } from './services/geminiService';
 import { detectSceneTimestamps } from './services/sceneDetectionService';
@@ -12,6 +12,7 @@ import { SceneGrid } from './components/SceneGrid';
 import { VideoPreviewModal } from './components/VideoPreviewModal';
 import { AnalysisProgressCard } from './components/AnalysisProgressCard';
 import { SessionHistoryList, SessionHistoryItem } from './components/SessionHistoryList';
+import { SessionSelector } from './components/SessionSelector';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
@@ -50,6 +51,7 @@ const App: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [pastSessions, setPastSessions] = useState<SessionHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
@@ -361,12 +363,38 @@ const App: React.FC = () => {
       alert("テーマをもう少し詳しく入力してください（100文字以上）");
       return;
     }
-    if (analyses.length === 0 && !selectedPattern) {
+    if (analyses.length === 0 && !selectedPattern && selectedSessionIds.length === 0) {
       alert("パターンを選択するか、分析データを追加してください。");
       return;
     }
     setIsGenerating(true);
     try {
+      // 選択されたセッションのシーンデータを並列fetch
+      let sceneReferences: SceneReferenceData[] = [];
+      if (selectedSessionIds.length > 0) {
+        const sessionsMap = new Map<string, SessionHistoryItem>(pastSessions.map(s => [s.id, s]));
+        const scenesResults = await Promise.all(
+          selectedSessionIds.map(id => fetchScenes(id))
+        );
+        sceneReferences = selectedSessionIds.map((id, idx) => {
+          const session = sessionsMap.get(id);
+          const scenes = scenesResults[idx]
+            .filter(s => s.analysis?.description)
+            .map(s => ({
+              sceneNumber: s.sceneNumber,
+              timestampFormatted: s.timestampFormatted,
+              description: s.analysis!.description,
+              tags: s.analysis!.tags,
+            }));
+          return {
+            sessionId: id,
+            videoFileName: session?.video_file_name || 'unknown',
+            videoDuration: session?.video_duration || 0,
+            scenes,
+          };
+        });
+      }
+
       const selectedAnalyses = analyses.filter(a => a.buzzRate >= BUZZ_THRESHOLD);
       const patternsToUse = selectedAnalyses.length > 0 ? selectedAnalyses : analyses;
       const script = await generateSmartScript(
@@ -374,7 +402,8 @@ const App: React.FC = () => {
         genTone,
         patternsToUse,
         selectedPattern,
-        userMetrics.editHistory
+        userMetrics.editHistory,
+        sceneReferences.length > 0 ? sceneReferences : undefined
       );
       setGeneratedScript(script);
       initScriptChat(script);
@@ -575,6 +604,12 @@ const App: React.FC = () => {
                 </h2>
 
                 <div className="space-y-4">
+                  <SessionSelector
+                    sessions={pastSessions}
+                    selectedIds={selectedSessionIds}
+                    onSelectionChange={setSelectedSessionIds}
+                  />
+
                   <div>
                     <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">1. 勝ちパターンの選択</label>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -622,15 +657,15 @@ const App: React.FC = () => {
                     <div className="flex items-end">
                       <button
                         onClick={handleGenerate}
-                        disabled={isGenerating || (analyses.length === 0 && !selectedPattern)}
+                        disabled={isGenerating || (analyses.length === 0 && !selectedPattern && selectedSessionIds.length === 0)}
                         className="px-8 py-3 buzz-gradient rounded-xl font-bold shadow-lg hover:shadow-pink-500/30 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale"
                       >
                         {isGenerating ? 'AI台本生成中...' : '最強の台本を生成'}
                       </button>
                     </div>
                   </div>
-                  {analyses.length === 0 && !selectedPattern && (
-                    <p className="text-[10px] text-red-400 mt-2">※台本生成にはパターン選択または分析データが必要です。</p>
+                  {analyses.length === 0 && !selectedPattern && selectedSessionIds.length === 0 && (
+                    <p className="text-[10px] text-red-400 mt-2">※台本生成にはパターン選択、分析データ、または参考セッションの選択が必要です。</p>
                   )}
                 </div>
               </div>
