@@ -10,6 +10,7 @@ create table if not exists analysis_sessions (
   video_duration real,
   total_scenes int not null default 0,
   analysis_status text not null default 'idle',
+  overall_analysis jsonb,
   created_at timestamptz default now()
 );
 
@@ -49,3 +50,9 @@ create policy "Allow all access to analysis_sessions" on analysis_sessions
 
 create policy "Allow all access to scenes" on scenes
   for all using (true) with check (true);
+
+-- ======================================
+-- マイグレーション: 動画全体分析カラム追加
+-- （既存テーブルに対して実行する場合）
+-- ======================================
+-- alter table analysis_sessions add column if not exists overall_analysis jsonb;

@@ -1,6 +1,6 @@
 
 import { supabase } from './supabaseClient';
-import { SceneData, SceneExtractionSession, SceneAnalysis } from '../types';
+import { SceneData, SceneExtractionSession, SceneAnalysis, VideoOverallAnalysis } from '../types';
 
 // base64 data URL → Blob に変換
 const dataUrlToBlob = (dataUrl: string): Blob => {
@@ -136,6 +136,21 @@ export const updateSessionAnalysisStatus = async (
   }
 };
 
+// 動画全体分析結果を保存
+export const updateOverallAnalysis = async (
+  sessionId: string,
+  overallAnalysis: VideoOverallAnalysis
+): Promise<void> => {
+  const { error } = await supabase
+    .from('analysis_sessions')
+    .update({ overall_analysis: overallAnalysis })
+    .eq('id', sessionId);
+
+  if (error) {
+    console.error('動画全体分析の保存エラー:', error);
+  }
+};
+
 // 過去のセッション一覧を取得
 export const fetchSessions = async (): Promise<{
   id: string;
@@ -144,6 +159,7 @@ export const fetchSessions = async (): Promise<{
   video_duration: number;
   total_scenes: number;
   analysis_status: string;
+  overall_analysis: VideoOverallAnalysis | null;
   created_at: string;
 }[]> => {
   const { data, error } = await supabase

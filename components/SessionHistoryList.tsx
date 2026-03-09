@@ -8,6 +8,7 @@ export interface SessionHistoryItem {
   video_duration: number;
   total_scenes: number;
   analysis_status: string;
+  overall_analysis: import('../types').VideoOverallAnalysis | null;
   created_at: string;
 }
 

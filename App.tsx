@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis, SceneReferenceData } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
-import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames } from './services/geminiService';
+import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames, analyzeVideoOverall } from './services/geminiService';
 import { detectSceneTimestamps } from './services/sceneDetectionService';
 import { ScriptViewer } from './components/ScriptViewer';
 import { SceneUploader } from './components/SceneUploader';
@@ -13,10 +13,11 @@ import { VideoPreviewModal } from './components/VideoPreviewModal';
 import { AnalysisProgressCard } from './components/AnalysisProgressCard';
 import { SessionHistoryList, SessionHistoryItem } from './components/SessionHistoryList';
 import { SessionSelector } from './components/SessionSelector';
+import { OverallAnalysisCard } from './components/OverallAnalysisCard';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
-import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
+import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DEFAULT_METRICS: UserMetrics = {
@@ -52,6 +53,8 @@ const App: React.FC = () => {
   const [pastSessions, setPastSessions] = useState<SessionHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [overallAnalysisProgress, setOverallAnalysisProgress] = useState<string>('');
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
@@ -111,6 +114,7 @@ const App: React.FC = () => {
 
     setIsExtracting(true);
     setExtractionProgress(null);
+    setVideoFile(file);
 
     try {
       // Phase 1: Python/コードでカット検出（分析はGemini 2.5 Flashで後段で実行）
@@ -170,6 +174,8 @@ const App: React.FC = () => {
         extractionStatus: 'extracted',
         analysisStatus: 'idle',
         analysisProgress: { current: 0, total: frames.length, percentage: 0 },
+        overallAnalysis: null,
+        overallAnalysisStatus: 'idle',
         createdAt: new Date().toISOString(),
       };
 
@@ -202,7 +208,8 @@ const App: React.FC = () => {
     setSceneSession(prev => prev ? {
       ...prev,
       analysisStatus: 'analyzing',
-      analysisProgress: { current: 0, total: prev.totalScenes, percentage: 0 }
+      analysisProgress: { current: 0, total: prev.totalScenes, percentage: 0 },
+      overallAnalysisStatus: videoFile ? 'analyzing' : prev.overallAnalysisStatus,
     } : null);
 
     // Supabase: 分析開始ステータス更新
@@ -210,58 +217,92 @@ const App: React.FC = () => {
       updateSessionAnalysisStatus(supabaseSessionId, 'analyzing');
     }
 
-    try {
-      await analyzeSceneFrames(
-        sceneSession.scenes,
-        (sceneId: string, analysis: SceneAnalysis) => {
-          setSceneSession(prev => {
-            if (!prev) return null;
-            const scene = prev.scenes.find(s => s.id === sceneId);
-            const updatedScenes = prev.scenes.map(s =>
-              s.id === sceneId ? { ...s, analysis, analysisStatus: 'completed' as const } : s
-            );
-            const completedCount = updatedScenes.filter(s => s.analysisStatus === 'completed').length;
+    // シーンフレーム分析（既存）
+    const sceneAnalysisPromise = (async () => {
+      try {
+        await analyzeSceneFrames(
+          sceneSession.scenes,
+          (sceneId: string, analysis: SceneAnalysis) => {
+            setSceneSession(prev => {
+              if (!prev) return null;
+              const scene = prev.scenes.find(s => s.id === sceneId);
+              const updatedScenes = prev.scenes.map(s =>
+                s.id === sceneId ? { ...s, analysis, analysisStatus: 'completed' as const } : s
+              );
+              const completedCount = updatedScenes.filter(s => s.analysisStatus === 'completed').length;
 
-            // Supabase: 個別シーンの分析結果を保存
-            if (supabaseSessionId && scene) {
-              updateSceneAnalysis(supabaseSessionId, scene.sceneNumber, analysis);
-            }
-
-            return {
-              ...prev,
-              scenes: updatedScenes,
-              analysisProgress: {
-                current: completedCount,
-                total: prev.totalScenes,
-                percentage: Math.round((completedCount / prev.totalScenes) * 100)
+              // Supabase: 個別シーンの分析結果を保存
+              if (supabaseSessionId && scene) {
+                updateSceneAnalysis(supabaseSessionId, scene.sceneNumber, analysis);
               }
-            };
-          });
-        },
-        (current: number, _total: number) => {
-          setSceneSession(prev => {
-            if (!prev) return null;
-            const updatedScenes = prev.scenes.map((s, i) =>
-              i === current - 1 ? { ...s, analysisStatus: 'analyzing' as const } : s
-            );
-            return { ...prev, scenes: updatedScenes };
-          });
+
+              return {
+                ...prev,
+                scenes: updatedScenes,
+                analysisProgress: {
+                  current: completedCount,
+                  total: prev.totalScenes,
+                  percentage: Math.round((completedCount / prev.totalScenes) * 100)
+                }
+              };
+            });
+          },
+          (current: number, _total: number) => {
+            setSceneSession(prev => {
+              if (!prev) return null;
+              const updatedScenes = prev.scenes.map((s, i) =>
+                i === current - 1 ? { ...s, analysisStatus: 'analyzing' as const } : s
+              );
+              return { ...prev, scenes: updatedScenes };
+            });
+          }
+        );
+        setSceneSession(prev => prev ? { ...prev, analysisStatus: 'completed' } : null);
+        if (supabaseSessionId) {
+          updateSessionAnalysisStatus(supabaseSessionId, 'completed');
         }
-      );
+      } catch (err) {
+        setSceneSession(prev => prev ? { ...prev, analysisStatus: 'error' } : null);
+        if (supabaseSessionId) {
+          updateSessionAnalysisStatus(supabaseSessionId, 'error');
+        }
+        throw err;
+      }
+    })();
 
-      setSceneSession(prev => prev ? { ...prev, analysisStatus: 'completed' } : null);
+    // 動画全体分析（音声込み）— videoFileがある場合のみ並列実行
+    const overallAnalysisPromise = videoFile ? (async () => {
+      try {
+        setOverallAnalysisProgress('動画をアップロード中...');
+        const result = await analyzeVideoOverall(videoFile, (status) => {
+          setOverallAnalysisProgress(status);
+        });
+        setSceneSession(prev => prev ? {
+          ...prev,
+          overallAnalysis: result,
+          overallAnalysisStatus: 'completed',
+        } : null);
+        setOverallAnalysisProgress('動画全体分析完了');
+        // Supabase: 全体分析結果を保存
+        if (supabaseSessionId) {
+          updateOverallAnalysis(supabaseSessionId, result);
+        }
+      } catch (err) {
+        console.error('動画全体分析エラー:', err);
+        setSceneSession(prev => prev ? { ...prev, overallAnalysisStatus: 'error' } : null);
+        setOverallAnalysisProgress('動画全体分析に失敗しました');
+        // 全体分析の失敗はシーン分析を止めない
+      }
+    })() : Promise.resolve();
 
-      // Supabase: 分析完了ステータス更新
+    try {
+      await Promise.all([sceneAnalysisPromise, overallAnalysisPromise]);
+      // 両方完了後にセッション一覧を更新
       if (supabaseSessionId) {
-        updateSessionAnalysisStatus(supabaseSessionId, 'completed');
         const sessions = await fetchSessions();
         setPastSessions(sessions);
       }
     } catch (err) {
-      setSceneSession(prev => prev ? { ...prev, analysisStatus: 'error' } : null);
-      if (supabaseSessionId) {
-        updateSessionAnalysisStatus(supabaseSessionId, 'error');
-      }
       alert(`AI分析に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
     }
   };
@@ -293,6 +334,8 @@ const App: React.FC = () => {
     }
     setSceneSession(null);
     setSupabaseSessionId(null);
+    setVideoFile(null);
+    setOverallAnalysisProgress('');
   };
 
   const handleLoadSessionFromHistory = async (session: SessionHistoryItem) => {
@@ -310,6 +353,8 @@ const App: React.FC = () => {
         extractionStatus: 'extracted',
         analysisStatus: session.analysis_status as SceneExtractionSession['analysisStatus'],
         analysisProgress: { current: scenes.length, total: scenes.length, percentage: 100 },
+        overallAnalysis: session.overall_analysis ?? null,
+        overallAnalysisStatus: session.overall_analysis ? 'completed' : 'idle',
         createdAt: session.created_at,
       };
       setSceneSession(restored);
@@ -395,6 +440,21 @@ const App: React.FC = () => {
         });
       }
 
+      // 選択されたセッションの動画全体分析データを収集
+      const overallAnalyses: { videoFileName: string; analysis: import('./types').VideoOverallAnalysis }[] = [];
+      if (selectedSessionIds.length > 0) {
+        const sessionsMap = new Map<string, SessionHistoryItem>(pastSessions.map(s => [s.id, s]));
+        for (const id of selectedSessionIds) {
+          const session = sessionsMap.get(id);
+          if (session?.overall_analysis) {
+            overallAnalyses.push({
+              videoFileName: session.video_file_name,
+              analysis: session.overall_analysis,
+            });
+          }
+        }
+      }
+
       const selectedAnalyses = analyses.filter(a => a.buzzRate >= BUZZ_THRESHOLD);
       const patternsToUse = selectedAnalyses.length > 0 ? selectedAnalyses : analyses;
       const script = await generateSmartScript(
@@ -403,7 +463,8 @@ const App: React.FC = () => {
         patternsToUse,
         selectedPattern,
         userMetrics.editHistory,
-        sceneReferences.length > 0 ? sceneReferences : undefined
+        sceneReferences.length > 0 ? sceneReferences : undefined,
+        overallAnalyses.length > 0 ? overallAnalyses : undefined
       );
       setGeneratedScript(script);
       initScriptChat(script);
@@ -537,11 +598,13 @@ const App: React.FC = () => {
             ) : (
               <>
                 {/* AI分析進捗 */}
-                {sceneSession.analysisStatus === 'analyzing' && (
+                {(sceneSession.analysisStatus === 'analyzing' || sceneSession.overallAnalysisStatus === 'analyzing') && (
                   <AnalysisProgressCard
                     current={sceneSession.analysisProgress.current}
                     total={sceneSession.analysisProgress.total}
                     percentage={sceneSession.analysisProgress.percentage}
+                    overallAnalysisStatus={sceneSession.overallAnalysisStatus}
+                    overallAnalysisProgress={overallAnalysisProgress}
                   />
                 )}
 
@@ -569,6 +632,11 @@ const App: React.FC = () => {
                   onDownloadTsv={handleDownloadTsv}
                   onSetViewMode={setSceneViewMode}
                 />
+
+                {/* 動画全体分析結果 */}
+                {sceneSession.overallAnalysis && (
+                  <OverallAnalysisCard analysis={sceneSession.overallAnalysis} />
+                )}
 
                 {/* シーングリッド */}
                 <SceneGrid

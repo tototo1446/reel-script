@@ -116,6 +116,14 @@ export const SessionSelector: React.FC<SessionSelectorProps> = ({
                   <span>{formatDuration(session.video_duration)}</span>
                   <span>・</span>
                   <span>{formatDate(session.created_at)}</span>
+                  {session.overall_analysis && (
+                    <>
+                      <span>・</span>
+                      <span className="text-purple-400 flex items-center gap-0.5">
+                        🎤 音声分析あり
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </label>

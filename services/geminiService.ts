@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, createPartFromUri, FileState, Chat } from "@google/genai";
-import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis, SceneReferenceData } from "../types";
+import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis, SceneReferenceData, VideoOverallAnalysis } from "../types";
 import { DEFAULT_PATTERNS } from "../constants";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
@@ -114,6 +114,57 @@ JSON形式で出力してください。`
   return JSON.parse(response.text!);
 };
 
+// 動画全体分析（音声込み）: 動画をGeminiにアップロードし、音声・映像を総合的に分析
+export const analyzeVideoOverall = async (
+  file: File,
+  onProgress?: (status: string) => void
+): Promise<VideoOverallAnalysis> => {
+  const { uri, mimeType } = await uploadAndWaitForFile(file, onProgress);
+
+  onProgress?.('AIが動画全体を音声込みで分析中...');
+
+  const videoPart = createPartFromUri(uri, mimeType);
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [
+      videoPart,
+      `この動画を音声・映像の両面から詳細に分析してください。
+
+【分析要件】
+1. transcription: 音声の完全な文字起こし（話者が複数いる場合は話者を区別。ナレーション、会話、すべて含む）
+2. bgm: BGM・音楽の説明（ジャンル、テンポ、雰囲気、使用タイミング）
+3. soundEffects: 効果音・環境音の説明（どんな効果音がどのタイミングで使われているか）
+4. narrationStyle: ナレーション・話し方のスタイル分析（話速、声のトーン、間の取り方、感情の込め方）
+5. overallStructure: 動画全体の構成・流れの説明（起承転結やフック→本題→CTAなどの構成）
+6. hookAnalysis: 冒頭フック（最初の3秒）の詳細分析（何を言っているか、どんな映像か、なぜ引き込まれるか）
+7. pacing: テンポ・ペース感の分析（カット切り替え頻度、情報密度、緩急の付け方）
+8. emotionalTone: 全体の感情トーン（明るい/真剣/ユーモラス/緊張感など）
+
+JSON形式で出力してください。`
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          transcription: { type: Type.STRING },
+          bgm: { type: Type.STRING },
+          soundEffects: { type: Type.STRING },
+          narrationStyle: { type: Type.STRING },
+          overallStructure: { type: Type.STRING },
+          hookAnalysis: { type: Type.STRING },
+          pacing: { type: Type.STRING },
+          emotionalTone: { type: Type.STRING },
+        },
+        required: ['transcription', 'bgm', 'soundEffects', 'narrationStyle', 'overallStructure', 'hookAnalysis', 'pacing', 'emotionalTone']
+      }
+    }
+  });
+
+  return JSON.parse(response.text!);
+};
+
 // シーン参照データをトリミング（1セッションあたり最大30シーン: 冒頭10 + 中盤10 + 終盤10）
 const trimScenes = (scenes: SceneReferenceData['scenes']): SceneReferenceData['scenes'] => {
   if (scenes.length <= 30) return scenes;
@@ -140,6 +191,28 @@ const buildSceneReferenceContext = (refs: SceneReferenceData[]): string => {
   return `\n\n【参考動画のシーン構成フロー】\n${blocks.join('\n\n')}\n\n上記の参考動画のシーン展開のペース感、切り替えタイミング、視覚的な演出パターンを踏まえて台本を作成してください。`;
 };
 
+// 動画全体分析データからプロンプトコンテキストを生成
+const buildOverallAnalysisContext = (overallAnalyses: { videoFileName: string; analysis: VideoOverallAnalysis }[]): string => {
+  if (overallAnalyses.length === 0) return '';
+
+  const blocks = overallAnalyses.map((item, i) => {
+    const a = item.analysis;
+    return `--- 参考動画${i + 1}: ${item.videoFileName} 音声・全体分析 ---
+【文字起こし】
+${a.transcription}
+
+【BGM・音楽】${a.bgm}
+【効果音・環境音】${a.soundEffects}
+【ナレーションスタイル】${a.narrationStyle}
+【全体構成】${a.overallStructure}
+【冒頭フック分析】${a.hookAnalysis}
+【テンポ・ペース感】${a.pacing}
+【感情トーン】${a.emotionalTone}`;
+  });
+
+  return `\n\n【参考動画の音声・全体分析データ】\n${blocks.join('\n\n')}\n\n上記の音声データ（文字起こし、話し方、BGM、効果音）とペース感・構成を踏まえて、セリフの口調・テンポ・演出を台本に反映してください。`;
+};
+
 // 台本生成（パターン選択・フィードバック履歴対応）
 export const generateSmartScript = async (
   theme: string,
@@ -147,7 +220,8 @@ export const generateSmartScript = async (
   patterns: AnalysisData[],
   selectedPatternId?: string | null,
   editHistory?: { instruction: string }[],
-  sceneReferences?: SceneReferenceData[]
+  sceneReferences?: SceneReferenceData[],
+  overallAnalyses?: { videoFileName: string; analysis: VideoOverallAnalysis }[]
 ): Promise<GeneratedScript> => {
   const patternContext = patterns
     .map(p => `[Pattern: ${p.title}] Hook: ${p.structure.hook}, Problem: ${p.structure.problem}, Solution: ${p.structure.solution}, CTA: ${p.structure.cta}, Camera: ${p.direction.camera}, Person: ${p.direction.person}, Caption: ${p.direction.caption}`)
@@ -162,6 +236,7 @@ export const generateSmartScript = async (
     : '';
 
   const sceneRefContext = sceneReferences ? buildSceneReferenceContext(sceneReferences) : '';
+  const overallContext = overallAnalyses ? buildOverallAnalysisContext(overallAnalyses) : '';
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
@@ -173,6 +248,7 @@ export const generateSmartScript = async (
     ${selectedPatternNote}
     ${feedbackContext}
     ${sceneRefContext}
+    ${overallContext}
 
     【出力ルール】
     - 構成・流れ・テンポは参考パターンを維持する

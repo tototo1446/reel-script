@@ -98,6 +98,8 @@ export interface SceneExtractionSession {
   extractionStatus: 'idle' | 'extracting' | 'extracted' | 'error';
   analysisStatus: 'idle' | 'analyzing' | 'completed' | 'error';
   analysisProgress: { current: number; total: number; percentage: number };
+  overallAnalysis: VideoOverallAnalysis | null;
+  overallAnalysisStatus: 'idle' | 'analyzing' | 'completed' | 'error';
   createdAt: string;
 }
 
@@ -113,4 +115,16 @@ export interface SceneReferenceData {
     description: string;
     tags: string[];
   }[];
+}
+
+// 動画全体分析（音声込み）
+export interface VideoOverallAnalysis {
+  transcription: string;        // 音声の完全な文字起こし
+  bgm: string;                  // BGM・音楽の説明
+  soundEffects: string;         // 効果音・環境音の説明
+  narrationStyle: string;       // ナレーション・話し方のスタイル
+  overallStructure: string;     // 動画全体の構成・流れ
+  hookAnalysis: string;         // 冒頭フック分析（最初の3秒）
+  pacing: string;               // テンポ・ペース感の分析
+  emotionalTone: string;        // 全体の感情トーン
 }
