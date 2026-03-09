@@ -9,6 +9,7 @@ interface SceneHeaderProps {
   onBack: () => void;
   isAnalyzing: boolean;
   analysisCompleted: boolean;
+  isSaving?: boolean;
 }
 
 export const SceneHeader: React.FC<SceneHeaderProps> = ({
@@ -20,6 +21,7 @@ export const SceneHeader: React.FC<SceneHeaderProps> = ({
   onBack,
   isAnalyzing,
   analysisCompleted,
+  isSaving = false,
 }) => {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
@@ -58,13 +60,13 @@ export const SceneHeader: React.FC<SceneHeaderProps> = ({
         )}
         <button
           onClick={onStartAnalysis}
-          disabled={isAnalyzing || analysisCompleted}
+          disabled={isAnalyzing || analysisCompleted || isSaving}
           className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 text-white text-sm font-bold rounded-xl shadow-lg hover:shadow-pink-500/20 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          {isAnalyzing ? 'AI分析中...' : analysisCompleted ? 'AI分析完了' : 'AI分析を実行'}
+          {isSaving ? 'データ保存中...' : isAnalyzing ? 'AI分析中...' : analysisCompleted ? 'AI分析完了' : 'AI分析を実行'}
         </button>
       </div>
     </div>

@@ -618,6 +618,7 @@ const App: React.FC = () => {
                   onBack={handleClearScenes}
                   isAnalyzing={sceneSession.analysisStatus === 'analyzing'}
                   analysisCompleted={sceneSession.analysisStatus === 'completed'}
+                  isSaving={isSaving}
                 />
 
                 {/* ツールバー */}
