@@ -4,6 +4,7 @@ import React from 'react';
 export interface SessionHistoryItem {
   id: string;
   video_file_name: string;
+  video_title: string | null;
   video_file_size: number;
   video_duration: number;
   total_scenes: number;
@@ -70,7 +71,7 @@ export const SessionHistoryList: React.FC<SessionHistoryListProps> = ({
               disabled={isLoading}
               className="flex-1 text-left min-w-0"
             >
-              <div className="font-medium text-white truncate">{session.video_file_name}</div>
+              <div className="font-medium text-white truncate">{session.video_title || session.video_file_name}</div>
               <div className="flex items-center gap-3 mt-1 text-xs text-zinc-400">
                 <span>{session.total_scenes}シーン</span>
                 <span>・</span>
@@ -94,7 +95,7 @@ export const SessionHistoryList: React.FC<SessionHistoryListProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                if (window.confirm(`「${session.video_file_name}」の履歴を削除しますか？`)) {
+                if (window.confirm(`「${session.video_title || session.video_file_name}」の履歴を削除しますか？`)) {
                   onDeleteSession(session.id);
                 }
               }}

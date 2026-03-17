@@ -161,7 +161,7 @@ export const extractFramesAtTimestamps = async (
   options: { quality?: number } = {},
   onProgress?: (progress: ExtractionProgress) => void
 ): Promise<{ frames: SceneData[]; duration: number; videoObjectUrl: string }> => {
-  const quality = options.quality ?? 0.8;
+  const quality = options.quality ?? 0.6;
   const videoObjectUrl = URL.createObjectURL(file);
 
   const video = document.createElement('video');

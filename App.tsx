@@ -17,7 +17,7 @@ import { OverallAnalysisCard } from './components/OverallAnalysisCard';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
-import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
+import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, updateVideoTitle, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DEFAULT_METRICS: UserMetrics = {
@@ -166,6 +166,7 @@ const App: React.FC = () => {
       const session: SceneExtractionSession = {
         id: Math.random().toString(36).substr(2, 9),
         videoFileName: file.name,
+        videoTitle: file.name,
         videoFileSize: file.size,
         videoDuration: duration,
         videoObjectUrl,
@@ -345,6 +346,7 @@ const App: React.FC = () => {
       const restored: SceneExtractionSession = {
         id: session.id,
         videoFileName: session.video_file_name,
+        videoTitle: session.video_title || session.video_file_name,
         videoFileSize: session.video_file_size ?? 0,
         videoDuration: session.video_duration ?? 0,
         videoObjectUrl: '', // 過去セッションは動画なし
@@ -379,6 +381,23 @@ const App: React.FC = () => {
     } catch (err) {
       console.error('削除に失敗:', err);
       alert('削除に失敗しました。');
+    }
+  };
+
+  const handleVideoTitleChange = async (newTitle: string) => {
+    // ローカルstateを即時更新
+    setSceneSession(prev => prev ? { ...prev, videoTitle: newTitle } : null);
+
+    // Supabaseに保存
+    if (supabaseSessionId) {
+      try {
+        await updateVideoTitle(supabaseSessionId, newTitle);
+        // 履歴一覧も更新
+        const sessions = await fetchSessions();
+        setPastSessions(sessions);
+      } catch (err) {
+        console.error('タイトル更新エラー:', err);
+      }
     }
   };
 
@@ -612,10 +631,12 @@ const App: React.FC = () => {
                 <SceneHeader
                   totalScenes={sceneSession.totalScenes}
                   videoFileName={sceneSession.videoFileName}
+                  videoTitle={sceneSession.videoTitle}
                   hasVideo={!!sceneSession.videoObjectUrl}
                   onOpenVideoPreview={() => setShowVideoPreview(true)}
                   onStartAnalysis={handleStartSceneAnalysis}
                   onBack={handleClearScenes}
+                  onTitleChange={handleVideoTitleChange}
                   isAnalyzing={sceneSession.analysisStatus === 'analyzing'}
                   analysisCompleted={sceneSession.analysisStatus === 'completed'}
                   isSaving={isSaving}

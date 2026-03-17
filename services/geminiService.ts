@@ -379,62 +379,79 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
-// シーンフレームの個別AI分析（Gemini 2.5 Flash）
-export const analyzeSceneFrames = async (
-  scenes: SceneData[],
-  onSceneAnalyzed: (sceneId: string, analysis: SceneAnalysis) => void,
-  onProgress: (current: number, total: number) => void
-): Promise<void> => {
-  for (let i = 0; i < scenes.length; i++) {
-    const scene = scenes[i];
-    onProgress(i + 1, scenes.length);
+// 単一シーンのAI分析（内部ヘルパー）
+const analyzeSingleScene = async (
+  scene: SceneData
+): Promise<{ sceneId: string; analysis: SceneAnalysis }> => {
+  try {
+    const base64Data = scene.thumbnailDataUrl.split(',')[1];
 
-    try {
-      const base64Data = scene.thumbnailDataUrl.split(',')[1];
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: base64Data,
-            },
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        {
+          inlineData: {
+            mimeType: 'image/jpeg',
+            data: base64Data,
           },
-          `この動画フレーム画像を分析してください。
+        },
+        `この動画フレーム画像を分析してください。
 シーン番号: ${scene.sceneNumber}
 タイムスタンプ: ${scene.timestampFormatted}
 
 以下を出力:
 1. description: シーンの内容を2-3文で簡潔に説明（日本語）
 2. tags: 関連ハッシュタグを3-5個（#付き、日本語）`
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              description: { type: Type.STRING },
-              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-            required: ['description', 'tags']
-          }
+      ],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            description: { type: Type.STRING },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ['description', 'tags']
         }
-      });
+      }
+    });
 
-      const analysis: SceneAnalysis = JSON.parse(response.text!);
-      onSceneAnalyzed(scene.id, analysis);
-    } catch (err) {
-      console.error(`シーン${scene.sceneNumber}の分析に失敗:`, err);
-      onSceneAnalyzed(scene.id, {
-        description: '分析に失敗しました',
-        tags: [],
-      });
+    return { sceneId: scene.id, analysis: JSON.parse(response.text!) };
+  } catch (err) {
+    console.error(`シーン${scene.sceneNumber}の分析に失敗:`, err);
+    return { sceneId: scene.id, analysis: { description: '分析に失敗しました', tags: [] } };
+  }
+};
+
+// シーンフレームの並列AI分析（Gemini 2.5 Flash、4並列バッチ処理）
+const SCENE_ANALYSIS_CONCURRENCY = 4;
+
+export const analyzeSceneFrames = async (
+  scenes: SceneData[],
+  onSceneAnalyzed: (sceneId: string, analysis: SceneAnalysis) => void,
+  onProgress: (current: number, total: number) => void
+): Promise<void> => {
+  let completedCount = 0;
+
+  for (let i = 0; i < scenes.length; i += SCENE_ANALYSIS_CONCURRENCY) {
+    const batch = scenes.slice(i, i + SCENE_ANALYSIS_CONCURRENCY);
+
+    // バッチ開始を通知
+    onProgress(i + 1, scenes.length);
+
+    // バッチ内を並列実行
+    const results = await Promise.all(batch.map(scene => analyzeSingleScene(scene)));
+
+    // 結果を通知
+    for (const { sceneId, analysis } of results) {
+      onSceneAnalyzed(sceneId, analysis);
+      completedCount++;
+      onProgress(completedCount, scenes.length);
     }
 
-    // Rate limit対策: 少し間隔を空ける
-    if (i < scenes.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 150));
+    // バッチ間のRate limit対策（最終バッチ以外）
+    if (i + SCENE_ANALYSIS_CONCURRENCY < scenes.length) {
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 };

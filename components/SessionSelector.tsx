@@ -108,7 +108,7 @@ export const SessionSelector: React.FC<SessionSelectorProps> = ({
               />
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate ${isSelected ? 'text-pink-200' : 'text-zinc-300'}`}>
-                  {session.video_file_name}
+                  {session.video_title || session.video_file_name}
                 </div>
                 <div className="flex items-center gap-2 text-[10px] text-zinc-500">
                   <span>{session.total_scenes}シーン</span>

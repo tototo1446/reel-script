@@ -194,19 +194,37 @@ export const detectCutTimestampsByFrameDiff = async (
 
   if (imageDataList.length < 2) return [0];
 
-  // 3メトリクスを計算
+  // 3メトリクスを計算（早期打ち切り付き: globalDiffが低い安定フレームはblock/histogramをスキップ）
   const globalDiffs: number[] = [];
   const blockMaxDiffs: number[] = [];
   const histDists: number[] = [];
   const GRID_SIZE = 8;
 
+  // Phase 1: globalDiffを全フレームで計算
   onProgress?.('シーン変化を解析中...');
   for (let i = 1; i < imageDataList.length; i++) {
     const prev = imageDataList[i - 1].data;
     const curr = imageDataList[i].data;
     globalDiffs.push(computeGlobalDiff(prev, curr));
-    blockMaxDiffs.push(computeBlockMaxDiff(prev, curr, w, h, GRID_SIZE));
-    histDists.push(computeHistogramDist(prev, curr));
+  }
+
+  // globalDiffの統計値から早期打ち切り閾値を決定（平均の50%未満は安定シーン）
+  const globalMean = globalDiffs.reduce((a, b) => a + b, 0) / globalDiffs.length;
+  const earlySkipThreshold = globalMean * 0.5;
+
+  // Phase 2: globalDiffが閾値以上のフレームのみblock/histogramを計算
+  for (let i = 1; i < imageDataList.length; i++) {
+    const idx = i - 1;
+    if (globalDiffs[idx] < earlySkipThreshold) {
+      // 安定フレーム: 重い計算をスキップし、低い値を入れる
+      blockMaxDiffs.push(0);
+      histDists.push(0);
+    } else {
+      const prev = imageDataList[i - 1].data;
+      const curr = imageDataList[i].data;
+      blockMaxDiffs.push(computeBlockMaxDiff(prev, curr, w, h, GRID_SIZE));
+      histDists.push(computeHistogramDist(prev, curr));
+    }
   }
 
   // --- 検出手法1: グローバル統計的閾値 (mean + sigma * std) ---

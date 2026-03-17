@@ -90,6 +90,7 @@ export interface SceneData {
 export interface SceneExtractionSession {
   id: string;
   videoFileName: string;
+  videoTitle: string;
   videoFileSize: number;
   videoDuration: number;
   videoObjectUrl: string;

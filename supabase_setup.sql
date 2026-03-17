@@ -56,3 +56,9 @@ create policy "Allow all access to scenes" on scenes
 -- （既存テーブルに対して実行する場合）
 -- ======================================
 -- alter table analysis_sessions add column if not exists overall_analysis jsonb;
+
+-- ======================================
+-- マイグレーション: 動画タイトル（表示用）カラム追加
+-- （既存テーブルに対して実行する場合）
+-- ======================================
+-- alter table analysis_sessions add column if not exists video_title text;

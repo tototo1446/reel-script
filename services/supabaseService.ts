@@ -52,6 +52,7 @@ export const saveSessionToSupabase = async (
     .from('analysis_sessions')
     .insert({
       video_file_name: session.videoFileName,
+      video_title: session.videoTitle,
       video_file_size: session.videoFileSize,
       video_duration: session.videoDuration,
       total_scenes: session.totalScenes,
@@ -151,10 +152,27 @@ export const updateOverallAnalysis = async (
   }
 };
 
+// 動画タイトルを更新
+export const updateVideoTitle = async (
+  sessionId: string,
+  title: string
+): Promise<void> => {
+  const { error } = await supabase
+    .from('analysis_sessions')
+    .update({ video_title: title })
+    .eq('id', sessionId);
+
+  if (error) {
+    console.error('動画タイトル更新エラー:', error);
+    throw error;
+  }
+};
+
 // 過去のセッション一覧を取得
 export const fetchSessions = async (): Promise<{
   id: string;
   video_file_name: string;
+  video_title: string | null;
   video_file_size: number;
   video_duration: number;
   total_scenes: number;

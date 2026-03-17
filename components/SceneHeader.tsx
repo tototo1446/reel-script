@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface SceneHeaderProps {
   totalScenes: number;
   videoFileName?: string;
+  videoTitle?: string;
   hasVideo?: boolean;
   onOpenVideoPreview: () => void;
   onStartAnalysis: () => void;
   onBack: () => void;
+  onTitleChange?: (newTitle: string) => void;
   isAnalyzing: boolean;
   analysisCompleted: boolean;
   isSaving?: boolean;
@@ -15,14 +17,54 @@ interface SceneHeaderProps {
 export const SceneHeader: React.FC<SceneHeaderProps> = ({
   totalScenes,
   videoFileName,
+  videoTitle,
   hasVideo = true,
   onOpenVideoPreview,
   onStartAnalysis,
   onBack,
+  onTitleChange,
   isAnalyzing,
   analysisCompleted,
   isSaving = false,
 }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const displayTitle = videoTitle || videoFileName || '';
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const handleStartEdit = () => {
+    setEditValue(displayTitle);
+    setIsEditing(true);
+  };
+
+  const handleConfirm = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== displayTitle && onTitleChange) {
+      onTitleChange(trimmed);
+    }
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleConfirm();
+    } else if (e.key === 'Escape') {
+      handleCancel();
+    }
+  };
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex items-center gap-3 min-w-0">
@@ -40,8 +82,52 @@ export const SceneHeader: React.FC<SceneHeaderProps> = ({
             <span>🎬</span>
             {totalScenes}シーン検出
           </h2>
-          {videoFileName && (
-            <p className="text-xs text-zinc-500 truncate mt-0.5">{videoFileName}</p>
+          {isEditing ? (
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <input
+                ref={inputRef}
+                type="text"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="bg-zinc-800 border border-zinc-600 rounded px-2 py-0.5 text-xs text-white outline-none focus:border-pink-500 transition-colors min-w-[200px]"
+              />
+              <button
+                onClick={handleConfirm}
+                className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-colors"
+                title="確定"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+              <button
+                onClick={handleCancel}
+                className="p-1 rounded hover:bg-red-500/20 text-red-400 transition-colors"
+                title="キャンセル"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            displayTitle && (
+              <div className="flex items-center gap-1.5 mt-0.5 group/title">
+                <p className="text-xs text-zinc-500 truncate">{displayTitle}</p>
+                {onTitleChange && (
+                  <button
+                    onClick={handleStartEdit}
+                    className="p-0.5 rounded hover:bg-zinc-700 text-zinc-600 hover:text-zinc-300 transition-colors"
+                    title="タイトルを編集"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )
           )}
         </div>
       </div>
