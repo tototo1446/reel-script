@@ -14,6 +14,7 @@ import { AnalysisProgressCard } from './components/AnalysisProgressCard';
 import { SessionHistoryList, SessionHistoryItem } from './components/SessionHistoryList';
 import { SessionSelector } from './components/SessionSelector';
 import { OverallAnalysisCard } from './components/OverallAnalysisCard';
+import { VideoTitleDialog } from './components/VideoTitleDialog';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
@@ -55,6 +56,7 @@ const App: React.FC = () => {
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [overallAnalysisProgress, setOverallAnalysisProgress] = useState<string>('');
+  const [showTitleDialog, setShowTitleDialog] = useState(false);
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
@@ -182,19 +184,8 @@ const App: React.FC = () => {
 
       setSceneSession(session);
 
-      // Supabaseに保存（バックグラウンド）
-      setIsSaving(true);
-      try {
-        const dbId = await saveSessionToSupabase(session);
-        setSupabaseSessionId(dbId);
-        // 過去セッション一覧を更新
-        const sessions = await fetchSessions();
-        setPastSessions(sessions);
-      } catch (saveErr) {
-        console.error('Supabase保存エラー:', saveErr);
-      } finally {
-        setIsSaving(false);
-      }
+      // タイトル入力ダイアログを表示（確定後にSupabase保存）
+      setShowTitleDialog(true);
     } catch (err) {
       alert(`シーン抽出に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
     } finally {
@@ -397,6 +388,30 @@ const App: React.FC = () => {
         setPastSessions(sessions);
       } catch (err) {
         console.error('タイトル更新エラー:', err);
+      }
+    }
+  };
+
+  // タイトル入力ダイアログ確定 → タイトルを設定してSupabase保存
+  const handleTitleDialogConfirm = async (title: string) => {
+    setShowTitleDialog(false);
+
+    // ローカルstateにタイトルを反映
+    setSceneSession(prev => prev ? { ...prev, videoTitle: title } : null);
+
+    // Supabaseに保存
+    if (sceneSession) {
+      setIsSaving(true);
+      try {
+        const sessionToSave = { ...sceneSession, videoTitle: title };
+        const dbId = await saveSessionToSupabase(sessionToSave);
+        setSupabaseSessionId(dbId);
+        const sessions = await fetchSessions();
+        setPastSessions(sessions);
+      } catch (saveErr) {
+        console.error('Supabase保存エラー:', saveErr);
+      } finally {
+        setIsSaving(false);
       }
     }
   };
@@ -677,6 +692,15 @@ const App: React.FC = () => {
                 onClose={() => setShowVideoPreview(false)}
                 videoObjectUrl={sceneSession.videoObjectUrl}
                 scenes={sceneSession.scenes}
+              />
+            )}
+
+            {/* タイトル入力ダイアログ（アップロード直後に必須表示） */}
+            {sceneSession && (
+              <VideoTitleDialog
+                isOpen={showTitleDialog}
+                originalFileName={sceneSession.videoFileName}
+                onConfirm={handleTitleDialogConfirm}
               />
             )}
           </div>
