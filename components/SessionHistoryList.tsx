@@ -11,6 +11,7 @@ export interface SessionHistoryItem {
   analysis_status: string;
   overall_analysis: import('../types').VideoOverallAnalysis | null;
   created_at: string;
+  first_thumbnail_url: string | null;
 }
 
 interface SessionHistoryListProps {
@@ -69,27 +70,40 @@ export const SessionHistoryList: React.FC<SessionHistoryListProps> = ({
             <button
               onClick={() => onLoadSession(session)}
               disabled={isLoading}
-              className="flex-1 text-left min-w-0"
+              className="flex-1 text-left min-w-0 flex items-center gap-3"
             >
-              <div className="font-medium text-white truncate">{session.video_title || session.video_file_name}</div>
-              <div className="flex items-center gap-3 mt-1 text-xs text-zinc-400">
-                <span>{session.total_scenes}シーン</span>
-                <span>・</span>
-                <span>{formatDuration(session.video_duration)}</span>
-                <span>・</span>
-                <span
-                  className={
-                    session.analysis_status === 'completed'
-                      ? 'text-emerald-400'
-                      : session.analysis_status === 'error'
-                        ? 'text-red-400'
-                        : 'text-zinc-400'
-                  }
-                >
-                  {statusLabel[session.analysis_status] ?? session.analysis_status}
-                </span>
-                <span>・</span>
-                <span>{formatDate(session.created_at)}</span>
+              {session.first_thumbnail_url ? (
+                <img
+                  src={session.first_thumbnail_url}
+                  alt=""
+                  className="w-10 h-[70px] object-cover rounded-lg flex-shrink-0 bg-zinc-800"
+                />
+              ) : (
+                <div className="w-10 h-[70px] rounded-lg flex-shrink-0 bg-zinc-800 flex items-center justify-center text-zinc-600 text-lg">
+                  🎬
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="font-medium text-white truncate">{session.video_title || session.video_file_name}</div>
+                <div className="flex items-center gap-3 mt-1 text-xs text-zinc-400">
+                  <span>{session.total_scenes}シーン</span>
+                  <span>・</span>
+                  <span>{formatDuration(session.video_duration)}</span>
+                  <span>・</span>
+                  <span
+                    className={
+                      session.analysis_status === 'completed'
+                        ? 'text-emerald-400'
+                        : session.analysis_status === 'error'
+                          ? 'text-red-400'
+                          : 'text-zinc-400'
+                    }
+                  >
+                    {statusLabel[session.analysis_status] ?? session.analysis_status}
+                  </span>
+                  <span>・</span>
+                  <span>{formatDate(session.created_at)}</span>
+                </div>
               </div>
             </button>
             <button

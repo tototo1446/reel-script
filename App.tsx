@@ -57,6 +57,7 @@ const App: React.FC = () => {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [overallAnalysisProgress, setOverallAnalysisProgress] = useState<string>('');
   const [showTitleDialog, setShowTitleDialog] = useState(false);
+  const [scriptReferenceIds, setScriptReferenceIds] = useLocalStorage<string[]>('reelcutter_script_refs', []);
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
@@ -501,6 +502,7 @@ const App: React.FC = () => {
         overallAnalyses.length > 0 ? overallAnalyses : undefined
       );
       setGeneratedScript(script);
+      setScriptReferenceIds([...selectedSessionIds]);
       initScriptChat(script);
       setChatMessages([]);
       updateMetrics('generation');
@@ -783,6 +785,28 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {generatedScript && scriptReferenceIds.length > 0 && (
+                <div className="glass p-4 rounded-2xl border-zinc-800">
+                  <h4 className="text-[10px] font-bold text-zinc-500 uppercase mb-2">参考にした動画</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {scriptReferenceIds.map(id => {
+                      const s = pastSessions.find(ps => ps.id === id);
+                      if (!s) return null;
+                      return (
+                        <div key={id} className="flex items-center gap-2 bg-zinc-900/60 border border-zinc-800 rounded-lg px-2.5 py-1.5">
+                          {s.first_thumbnail_url ? (
+                            <img src={s.first_thumbnail_url} alt="" className="w-5 h-9 object-cover rounded" />
+                          ) : (
+                            <div className="w-5 h-9 rounded bg-zinc-800 flex items-center justify-center text-[8px] text-zinc-600">🎬</div>
+                          )}
+                          <span className="text-xs text-zinc-300 truncate max-w-[160px]">{s.video_title || s.video_file_name}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {generatedScript && (
                 <div className="glass p-6 rounded-2xl border-emerald-500/20">

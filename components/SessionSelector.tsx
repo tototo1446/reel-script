@@ -106,6 +106,17 @@ export const SessionSelector: React.FC<SessionSelectorProps> = ({
                 onChange={() => handleToggle(session.id)}
                 className="w-4 h-4 rounded border-zinc-600 text-pink-500 focus:ring-pink-500 focus:ring-offset-0 bg-zinc-800"
               />
+              {session.first_thumbnail_url ? (
+                <img
+                  src={session.first_thumbnail_url}
+                  alt=""
+                  className="w-8 h-14 object-cover rounded-md flex-shrink-0 bg-zinc-800"
+                />
+              ) : (
+                <div className="w-8 h-14 rounded-md flex-shrink-0 bg-zinc-800 flex items-center justify-center text-zinc-600 text-xs">
+                  🎬
+                </div>
+              )}
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate ${isSelected ? 'text-pink-200' : 'text-zinc-300'}`}>
                   {session.video_title || session.video_file_name}

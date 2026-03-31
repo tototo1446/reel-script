@@ -168,7 +168,7 @@ export const updateVideoTitle = async (
   }
 };
 
-// 過去のセッション一覧を取得
+// 過去のセッション一覧を取得（各セッションの代表サムネイル付き）
 export const fetchSessions = async (): Promise<{
   id: string;
   video_file_name: string;
@@ -179,6 +179,7 @@ export const fetchSessions = async (): Promise<{
   analysis_status: string;
   overall_analysis: VideoOverallAnalysis | null;
   created_at: string;
+  first_thumbnail_url: string | null;
 }[]> => {
   const { data, error } = await supabase
     .from('analysis_sessions')
@@ -191,7 +192,27 @@ export const fetchSessions = async (): Promise<{
     return [];
   }
 
-  return data || [];
+  const sessions = data || [];
+  if (sessions.length === 0) return [];
+
+  // 各セッションの最初のシーンのサムネイルを一括取得
+  const sessionIds = sessions.map(s => s.id);
+  const { data: thumbnails } = await supabase
+    .from('scenes')
+    .select('session_id, thumbnail_url')
+    .in('session_id', sessionIds)
+    .eq('scene_number', 1);
+
+  const thumbnailMap = new Map<string, string>(
+    (thumbnails || [])
+      .filter(t => t.thumbnail_url)
+      .map(t => [t.session_id, t.thumbnail_url])
+  );
+
+  return sessions.map(s => ({
+    ...s,
+    first_thumbnail_url: thumbnailMap.get(s.id) || null,
+  }));
 };
 
 // セッション内のシーン一覧を取得
