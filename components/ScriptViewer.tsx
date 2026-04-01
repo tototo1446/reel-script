@@ -35,7 +35,7 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({ script }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        {script.scenes.map((scene, idx) => (
+        {(script.scenes || []).map((scene, idx) => (
           <div 
             key={idx} 
             onClick={() => toggleScene(idx)}

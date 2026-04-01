@@ -877,7 +877,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="space-y-4">
-                    {generatedScript.scenes.map((scene, i) => (
+                    {(generatedScript.scenes || []).map((scene, i) => (
                       <div key={i} className="bg-zinc-900/40 p-4 rounded-xl border border-zinc-800">
                         <div className="text-[10px] font-bold text-zinc-500 mb-2">{scene.time}</div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

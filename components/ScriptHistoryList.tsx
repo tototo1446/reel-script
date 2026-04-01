@@ -48,7 +48,7 @@ export const ScriptHistoryList: React.FC<ScriptHistoryListProps> = ({
                 <div className="font-medium text-white text-sm truncate">{script.theme}</div>
                 <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-500">
                   <span className="bg-pink-500/20 text-pink-400 px-1.5 py-0.5 rounded">{script.tone}</span>
-                  <span>{script.scenes.length}シーン</span>
+                  <span>{(script.scenes || []).length}シーン</span>
                   <span>・</span>
                   <span>{formatDate(script.created_at)}</span>
                   {isUpdated && (
