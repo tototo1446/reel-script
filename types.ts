@@ -70,6 +70,17 @@ export interface CrossAnalysisResult {
   createdAt: string;
 }
 
+// 台本履歴（Supabaseから取得）
+export interface ScriptHistoryItem {
+  id: string;
+  theme: string;
+  tone: string;
+  pattern_id: string;
+  scenes: GeneratedScript['scenes'];
+  created_at: string;
+  updated_at: string;
+}
+
 // シーン分析関連の型
 export interface SceneAnalysis {
   description: string;

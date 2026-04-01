@@ -1,6 +1,6 @@
 
 import { supabase } from './supabaseClient';
-import { SceneData, SceneExtractionSession, SceneAnalysis, VideoOverallAnalysis } from '../types';
+import { SceneData, SceneExtractionSession, SceneAnalysis, VideoOverallAnalysis, GeneratedScript, ScriptHistoryItem } from '../types';
 
 // base64 data URL → Blob に変換
 const dataUrlToBlob = (dataUrl: string): Blob => {
@@ -263,5 +263,109 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
 
   if (error) {
     console.error('セッション削除エラー:', error);
+  }
+};
+
+// ========== 台本関連 ==========
+
+// 台本をSupabaseに保存（新規INSERT + 参照セッション紐付け）
+export const saveScriptToSupabase = async (
+  script: GeneratedScript,
+  referenceSessionIds: string[]
+): Promise<string> => {
+  const { data, error } = await supabase
+    .from('generated_scripts')
+    .insert({
+      theme: script.theme,
+      tone: script.tone,
+      pattern_id: script.patternId,
+      scenes: script.scenes,
+    })
+    .select('id')
+    .single();
+
+  if (error || !data) {
+    throw new Error(`台本保存エラー: ${error?.message}`);
+  }
+
+  const dbScriptId = data.id;
+
+  if (referenceSessionIds.length > 0) {
+    const refs = referenceSessionIds.map(sessionId => ({
+      script_id: dbScriptId,
+      session_id: sessionId,
+    }));
+    const { error: refError } = await supabase
+      .from('script_references')
+      .insert(refs);
+
+    if (refError) {
+      console.error('台本参照保存エラー:', refError);
+    }
+  }
+
+  return dbScriptId;
+};
+
+// 台本を更新（チャット修正後）
+export const updateScriptInSupabase = async (
+  scriptId: string,
+  script: GeneratedScript
+): Promise<void> => {
+  const { error } = await supabase
+    .from('generated_scripts')
+    .update({
+      scenes: script.scenes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', scriptId);
+
+  if (error) {
+    console.error('台本更新エラー:', error);
+  }
+};
+
+// 過去の台本一覧を取得
+export const fetchScripts = async (): Promise<ScriptHistoryItem[]> => {
+  const { data, error } = await supabase
+    .from('generated_scripts')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  if (error) {
+    console.error('台本一覧取得エラー:', error);
+    return [];
+  }
+
+  return data || [];
+};
+
+// 台本の参照セッションIDを取得
+export const fetchScriptReferences = async (
+  scriptId: string
+): Promise<string[]> => {
+  const { data, error } = await supabase
+    .from('script_references')
+    .select('session_id')
+    .eq('script_id', scriptId);
+
+  if (error) {
+    console.error('台本参照取得エラー:', error);
+    return [];
+  }
+
+  return (data || []).map(r => r.session_id);
+};
+
+// 台本を削除
+export const deleteScriptFromSupabase = async (scriptId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('generated_scripts')
+    .delete()
+    .eq('id', scriptId);
+
+  if (error) {
+    console.error('台本削除エラー:', error);
   }
 };

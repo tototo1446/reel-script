@@ -62,3 +62,40 @@ create policy "Allow all access to scenes" on scenes
 -- （既存テーブルに対して実行する場合）
 -- ======================================
 -- alter table analysis_sessions add column if not exists video_title text;
+
+-- ======================================
+-- 4. 台本（生成結果の保存）
+-- ======================================
+create table if not exists generated_scripts (
+  id uuid default gen_random_uuid() primary key,
+  theme text not null,
+  tone text not null,
+  pattern_id text not null,
+  scenes jsonb not null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- 5. 台本 ↔ 参照セッション（中間テーブル）
+create table if not exists script_references (
+  id uuid default gen_random_uuid() primary key,
+  script_id uuid references generated_scripts(id) on delete cascade not null,
+  session_id uuid references analysis_sessions(id) on delete cascade not null,
+  created_at timestamptz default now(),
+  unique(script_id, session_id)
+);
+
+-- インデックス
+create index if not exists idx_generated_scripts_created_at on generated_scripts(created_at desc);
+create index if not exists idx_script_references_script_id on script_references(script_id);
+create index if not exists idx_script_references_session_id on script_references(session_id);
+
+-- RLS ポリシー
+alter table generated_scripts enable row level security;
+alter table script_references enable row level security;
+
+create policy "Allow all access to generated_scripts" on generated_scripts
+  for all using (true) with check (true);
+
+create policy "Allow all access to script_references" on script_references
+  for all using (true) with check (true);

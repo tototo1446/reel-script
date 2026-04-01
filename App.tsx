@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis, SceneReferenceData } from './types';
+import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis, SceneReferenceData, ScriptHistoryItem } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
 import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames, analyzeVideoOverall } from './services/geminiService';
 import { detectSceneTimestamps } from './services/sceneDetectionService';
@@ -15,10 +15,11 @@ import { SessionHistoryList, SessionHistoryItem } from './components/SessionHist
 import { SessionSelector } from './components/SessionSelector';
 import { OverallAnalysisCard } from './components/OverallAnalysisCard';
 import { VideoTitleDialog } from './components/VideoTitleDialog';
+import { ScriptHistoryList } from './components/ScriptHistoryList';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
-import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, updateVideoTitle, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase } from './services/supabaseService';
+import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, updateVideoTitle, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase, saveScriptToSupabase, updateScriptInSupabase, fetchScripts, fetchScriptReferences, deleteScriptFromSupabase } from './services/supabaseService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DEFAULT_METRICS: UserMetrics = {
@@ -58,14 +59,17 @@ const App: React.FC = () => {
   const [overallAnalysisProgress, setOverallAnalysisProgress] = useState<string>('');
   const [showTitleDialog, setShowTitleDialog] = useState(false);
   const [scriptReferenceIds, setScriptReferenceIds] = useLocalStorage<string[]>('reelcutter_script_refs', []);
+  const [supabaseScriptId, setSupabaseScriptId] = useState<string | null>(null);
+  const [pastScripts, setPastScripts] = useState<ScriptHistoryItem[]>([]);
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
     if (generatedScript) {
       initScriptChat(generatedScript);
     }
-    // 過去セッション取得
+    // 過去セッション・台本取得
     fetchSessions().then(sessions => setPastSessions(sessions));
+    fetchScripts().then(scripts => setPastScripts(scripts));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // videoObjectUrl のクリーンアップ
@@ -376,6 +380,41 @@ const App: React.FC = () => {
     }
   };
 
+  // === 台本履歴ハンドラ ===
+
+  const handleLoadScript = async (scriptItem: ScriptHistoryItem) => {
+    const script: GeneratedScript = {
+      id: scriptItem.id,
+      theme: scriptItem.theme,
+      tone: scriptItem.tone,
+      patternId: scriptItem.pattern_id,
+      scenes: scriptItem.scenes,
+    };
+    setGeneratedScript(script);
+    setSupabaseScriptId(scriptItem.id);
+    initScriptChat(script);
+    setChatMessages([]);
+
+    const refs = await fetchScriptReferences(scriptItem.id);
+    setScriptReferenceIds(refs);
+  };
+
+  const handleDeleteScript = async (scriptId: string) => {
+    try {
+      await deleteScriptFromSupabase(scriptId);
+      if (supabaseScriptId === scriptId) {
+        setGeneratedScript(null);
+        setSupabaseScriptId(null);
+        setScriptReferenceIds([]);
+        setChatMessages([]);
+      }
+      const scripts = await fetchScripts();
+      setPastScripts(scripts);
+    } catch (err) {
+      console.error('台本削除エラー:', err);
+    }
+  };
+
   const handleVideoTitleChange = async (newTitle: string) => {
     // ローカルstateを即時更新
     setSceneSession(prev => prev ? { ...prev, videoTitle: newTitle } : null);
@@ -506,6 +545,15 @@ const App: React.FC = () => {
       initScriptChat(script);
       setChatMessages([]);
       updateMetrics('generation');
+
+      // Supabase保存（バックグラウンド）
+      saveScriptToSupabase(script, selectedSessionIds)
+        .then(dbId => {
+          setSupabaseScriptId(dbId);
+          return fetchScripts();
+        })
+        .then(scripts => setPastScripts(scripts))
+        .catch(err => console.error('台本のSupabase保存エラー:', err));
     } catch (err) {
       console.error(err);
       alert(`台本生成に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
@@ -547,6 +595,12 @@ const App: React.FC = () => {
       const newScript = await rewriteScript(instruction);
       setGeneratedScript(newScript);
       updateMetrics('edit', generatedScript?.id, instruction);
+
+      // Supabase更新（バックグラウンド）
+      if (supabaseScriptId) {
+        updateScriptInSupabase(supabaseScriptId, newScript)
+          .catch(err => console.error('台本更新エラー:', err));
+      }
 
       const modelMsg: ChatMessage = {
         role: 'model',
@@ -887,6 +941,13 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* 台本履歴 */}
+              <ScriptHistoryList
+                scripts={pastScripts}
+                onLoadScript={handleLoadScript}
+                onDeleteScript={handleDeleteScript}
+              />
             </div>
 
             {/* Preview Sidebar */}
