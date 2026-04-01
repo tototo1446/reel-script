@@ -68,8 +68,8 @@ const App: React.FC = () => {
       initScriptChat(generatedScript);
     }
     // 過去セッション・台本取得
-    fetchSessions().then(sessions => setPastSessions(sessions));
-    fetchScripts().then(scripts => setPastScripts(scripts));
+    fetchSessions().then(sessions => setPastSessions(sessions)).catch(console.error);
+    fetchScripts().then(scripts => setPastScripts(scripts)).catch(console.error);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // videoObjectUrl のクリーンアップ
