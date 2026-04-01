@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, createPartFromUri, FileState, Chat } from "@google/genai";
-import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis, SceneReferenceData, VideoOverallAnalysis } from "../types";
+import { AnalysisData, GeneratedScript, CrossAnalysisResult, SceneData, SceneAnalysis, SceneReferenceData, VideoOverallAnalysis, KnowledgeItem } from "../types";
 import { DEFAULT_PATTERNS } from "../constants";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
@@ -213,6 +213,43 @@ ${a.transcription}
   return `\n\n【参考動画の音声・全体分析データ】\n${blocks.join('\n\n')}\n\n上記の音声データ（文字起こし、話し方、BGM、効果音）とペース感・構成を踏まえて、セリフの口調・テンポ・演出を台本に反映してください。`;
 };
 
+// ナレッジコンテキスト構築（プロンプト注入用）
+const buildKnowledgeContext = (items: KnowledgeItem[]): string => {
+  if (items.length === 0) return '';
+  const sections = items.map(item =>
+    `--- [${item.category}] ${item.title} ---\n${item.content}`
+  ).join('\n\n');
+  return `\n\n【運用ナレッジ・ガイドライン】\n以下のナレッジを台本作成の方針として必ず遵守してください。\n${sections}`;
+};
+
+// PDF/画像からテキスト抽出（Gemini File API経由）
+export const extractTextFromFile = async (
+  file: File,
+  onProgress?: (status: string) => void
+): Promise<string> => {
+  const { uri, mimeType } = await uploadAndWaitForFile(file, onProgress);
+
+  onProgress?.('AIがコンテンツを読み取り中...');
+
+  const filePart = createPartFromUri(uri, mimeType);
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [
+      filePart,
+      `このファイルの内容をすべてテキストとして抽出してください。
+
+【指示】
+- 文書の構成（見出し、箇条書き、表など）を可能な限り保持してテキスト化する
+- 画像の場合は、画像内のすべてのテキストを読み取り、視覚的な情報（図表、レイアウト）も説明する
+- PDFの場合は、全ページの内容を漏れなく抽出する
+- 出力はプレーンテキストのみ`
+    ],
+  });
+
+  return response.text || '';
+};
+
 // 台本生成（パターン選択・フィードバック履歴対応）
 export const generateSmartScript = async (
   theme: string,
@@ -221,7 +258,8 @@ export const generateSmartScript = async (
   selectedPatternId?: string | null,
   editHistory?: { instruction: string }[],
   sceneReferences?: SceneReferenceData[],
-  overallAnalyses?: { videoFileName: string; analysis: VideoOverallAnalysis }[]
+  overallAnalyses?: { videoFileName: string; analysis: VideoOverallAnalysis }[],
+  knowledgeItems?: KnowledgeItem[]
 ): Promise<GeneratedScript> => {
   const patternContext = patterns
     .map(p => `[Pattern: ${p.title}] Hook: ${p.structure.hook}, Problem: ${p.structure.problem}, Solution: ${p.structure.solution}, CTA: ${p.structure.cta}, Camera: ${p.direction.camera}, Person: ${p.direction.person}, Caption: ${p.direction.caption}`)
@@ -237,6 +275,7 @@ export const generateSmartScript = async (
 
   const sceneRefContext = sceneReferences ? buildSceneReferenceContext(sceneReferences) : '';
   const overallContext = overallAnalyses ? buildOverallAnalysisContext(overallAnalyses) : '';
+  const knowledgeContext = knowledgeItems ? buildKnowledgeContext(knowledgeItems) : '';
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
@@ -249,6 +288,7 @@ export const generateSmartScript = async (
     ${feedbackContext}
     ${sceneRefContext}
     ${overallContext}
+    ${knowledgeContext}
 
     【出力ルール】
     - 構成・流れ・テンポは参考パターンを維持する

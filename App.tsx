@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis, SceneReferenceData, ScriptHistoryItem } from './types';
+import { AppMode, AnalysisData, GeneratedScript, ChatMessage, UserMetrics, CrossAnalysisResult, SceneExtractionSession, SceneViewMode, SceneAnalysis, SceneReferenceData, ScriptHistoryItem, KnowledgeItem } from './types';
 import { DEFAULT_PATTERNS, TONES, BUZZ_THRESHOLD } from './constants';
-import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames, analyzeVideoOverall } from './services/geminiService';
+import { generateSmartScript, crossAnalyzePatterns, initScriptChat, rewriteScript, analyzeSceneFrames, analyzeVideoOverall, extractTextFromFile } from './services/geminiService';
 import { detectSceneTimestamps } from './services/sceneDetectionService';
 import { ScriptViewer } from './components/ScriptViewer';
 import { SceneUploader } from './components/SceneUploader';
@@ -17,10 +17,11 @@ import { OverallAnalysisCard } from './components/OverallAnalysisCard';
 import { VideoTitleDialog } from './components/VideoTitleDialog';
 import { ScriptHistoryList } from './components/ScriptHistoryList';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { KnowledgeManager } from './components/KnowledgeManager';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
-import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, updateVideoTitle, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase, saveScriptToSupabase, updateScriptInSupabase, fetchScripts, fetchScriptReferences, deleteScriptFromSupabase } from './services/supabaseService';
+import { saveSessionToSupabase, updateSceneAnalysis, updateSessionAnalysisStatus, updateOverallAnalysis, updateVideoTitle, fetchSessions, fetchScenes, deleteSession as deleteSessionFromSupabase, saveScriptToSupabase, updateScriptInSupabase, fetchScripts, fetchScriptReferences, deleteScriptFromSupabase, fetchKnowledgeItems, saveKnowledgeItem, deleteKnowledgeItem } from './services/supabaseService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DEFAULT_METRICS: UserMetrics = {
@@ -62,15 +63,19 @@ const App: React.FC = () => {
   const [scriptReferenceIds, setScriptReferenceIds] = useLocalStorage<string[]>('reelcutter_script_refs', []);
   const [supabaseScriptId, setSupabaseScriptId] = useState<string | null>(null);
   const [pastScripts, setPastScripts] = useState<ScriptHistoryItem[]>([]);
+  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [isKnowledgeExtracting, setIsKnowledgeExtracting] = useState(false);
+  const [knowledgeExtractionProgress, setKnowledgeExtractionProgress] = useState('');
 
   // 初回マウント時: localStorage復元 + 過去セッション取得
   useEffect(() => {
     if (generatedScript) {
       initScriptChat(generatedScript);
     }
-    // 過去セッション・台本取得
+    // 過去セッション・台本・ナレッジ取得
     fetchSessions().then(sessions => setPastSessions(sessions)).catch(console.error);
     fetchScripts().then(scripts => setPastScripts(scripts)).catch(console.error);
+    fetchKnowledgeItems().then(items => setKnowledgeItems(items)).catch(console.error);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // videoObjectUrl のクリーンアップ
@@ -416,6 +421,49 @@ const App: React.FC = () => {
     }
   };
 
+  // === ナレッジハンドラ ===
+
+  const handleAddTextKnowledge = async (title: string, category: string, content: string) => {
+    const id = await saveKnowledgeItem({ title, category, content, source_type: 'text', source_file_name: null });
+    if (id) {
+      const items = await fetchKnowledgeItems();
+      setKnowledgeItems(items);
+    }
+  };
+
+  const handleAddFileKnowledge = async (title: string, category: string, file: File) => {
+    setIsKnowledgeExtracting(true);
+    setKnowledgeExtractionProgress('処理を開始...');
+    try {
+      const sourceType = file.type === 'application/pdf' ? 'pdf' : 'image';
+      const content = await extractTextFromFile(file, (status) => setKnowledgeExtractionProgress(status));
+      if (!content.trim()) {
+        alert('ファイルからテキストを抽出できませんでした。');
+        return;
+      }
+      const id = await saveKnowledgeItem({
+        title, category, content,
+        source_type: sourceType as 'pdf' | 'image',
+        source_file_name: file.name,
+      });
+      if (id) {
+        const items = await fetchKnowledgeItems();
+        setKnowledgeItems(items);
+      }
+    } catch (err) {
+      alert(`ナレッジ抽出に失敗しました: ${err instanceof Error ? err.message : '不明なエラー'}`);
+    } finally {
+      setIsKnowledgeExtracting(false);
+      setKnowledgeExtractionProgress('');
+    }
+  };
+
+  const handleDeleteKnowledge = async (id: string) => {
+    await deleteKnowledgeItem(id);
+    const items = await fetchKnowledgeItems();
+    setKnowledgeItems(items);
+  };
+
   const handleVideoTitleChange = async (newTitle: string) => {
     // ローカルstateを即時更新
     setSceneSession(prev => prev ? { ...prev, videoTitle: newTitle } : null);
@@ -539,7 +587,8 @@ const App: React.FC = () => {
         selectedPattern,
         userMetrics.editHistory,
         sceneReferences.length > 0 ? sceneReferences : undefined,
-        overallAnalyses.length > 0 ? overallAnalyses : undefined
+        overallAnalyses.length > 0 ? overallAnalyses : undefined,
+        knowledgeItems.length > 0 ? knowledgeItems : undefined
       );
       setGeneratedScript(script);
       setScriptReferenceIds([...selectedSessionIds]);
@@ -782,6 +831,15 @@ const App: React.FC = () => {
                     sessions={pastSessions}
                     selectedIds={selectedSessionIds}
                     onSelectionChange={setSelectedSessionIds}
+                  />
+
+                  <KnowledgeManager
+                    knowledgeItems={knowledgeItems}
+                    onAddText={handleAddTextKnowledge}
+                    onAddFile={handleAddFileKnowledge}
+                    onDelete={handleDeleteKnowledge}
+                    isExtracting={isKnowledgeExtracting}
+                    extractionProgress={knowledgeExtractionProgress}
                   />
 
                   <div>

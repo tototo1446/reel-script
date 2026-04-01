@@ -99,3 +99,24 @@ create policy "Allow all access to generated_scripts" on generated_scripts
 
 create policy "Allow all access to script_references" on script_references
   for all using (true) with check (true);
+
+-- ======================================
+-- 6. ナレッジ管理（運用ノウハウ・ガイドライン）
+-- ======================================
+create table if not exists knowledge_items (
+  id uuid default gen_random_uuid() primary key,
+  title text not null,
+  category text not null default 'general',
+  content text not null,
+  source_type text not null,
+  source_file_name text,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_knowledge_items_created_at on knowledge_items(created_at desc);
+create index if not exists idx_knowledge_items_category on knowledge_items(category);
+
+alter table knowledge_items enable row level security;
+
+create policy "Allow all access to knowledge_items" on knowledge_items
+  for all using (true) with check (true);

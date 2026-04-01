@@ -1,6 +1,6 @@
 
 import { supabase } from './supabaseClient';
-import { SceneData, SceneExtractionSession, SceneAnalysis, VideoOverallAnalysis, GeneratedScript, ScriptHistoryItem } from '../types';
+import { SceneData, SceneExtractionSession, SceneAnalysis, VideoOverallAnalysis, GeneratedScript, ScriptHistoryItem, KnowledgeItem } from '../types';
 
 // base64 data URL → Blob に変換
 const dataUrlToBlob = (dataUrl: string): Blob => {
@@ -378,5 +378,66 @@ export const deleteScriptFromSupabase = async (scriptId: string): Promise<void> 
 
   if (error) {
     console.error('台本削除エラー:', error);
+  }
+};
+
+// ========== ナレッジ関連 ==========
+
+// ナレッジ一覧取得
+export const fetchKnowledgeItems = async (): Promise<KnowledgeItem[]> => {
+  try {
+    const { data, error } = await supabase
+      .from('knowledge_items')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('ナレッジ一覧取得エラー:', error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error('ナレッジ一覧取得エラー:', err);
+    return [];
+  }
+};
+
+// ナレッジ保存
+export const saveKnowledgeItem = async (
+  item: Omit<KnowledgeItem, 'id' | 'created_at'>
+): Promise<string | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('knowledge_items')
+      .insert({
+        title: item.title,
+        category: item.category,
+        content: item.content,
+        source_type: item.source_type,
+        source_file_name: item.source_file_name,
+      })
+      .select('id')
+      .single();
+
+    if (error || !data) {
+      console.error('ナレッジ保存エラー:', error?.message);
+      return null;
+    }
+    return data.id;
+  } catch (err) {
+    console.error('ナレッジ保存エラー:', err);
+    return null;
+  }
+};
+
+// ナレッジ削除
+export const deleteKnowledgeItem = async (id: string): Promise<void> => {
+  const { error } = await supabase
+    .from('knowledge_items')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('ナレッジ削除エラー:', error);
   }
 };

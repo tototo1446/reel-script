@@ -70,6 +70,17 @@ export interface CrossAnalysisResult {
   createdAt: string;
 }
 
+// ナレッジアイテム（運用ノウハウ・ガイドライン）
+export interface KnowledgeItem {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  source_type: 'text' | 'pdf' | 'image';
+  source_file_name: string | null;
+  created_at: string;
+}
+
 // 台本履歴（Supabaseから取得）
 export interface ScriptHistoryItem {
   id: string;
