@@ -1,5 +1,5 @@
 
-export type AppMode = 'ANALYSIS' | 'GENERATION' | 'LOGS';
+export type AppMode = 'ANALYSIS' | 'GENERATION' | 'KNOWLEDGE' | 'LOGS';
 
 export interface AnalysisData {
   id: string;

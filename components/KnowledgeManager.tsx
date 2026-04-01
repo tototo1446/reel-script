@@ -33,7 +33,7 @@ export const KnowledgeManager: React.FC<KnowledgeManagerProps> = ({
   isExtracting,
   extractionProgress,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true);
   const [inputMode, setInputMode] = useState<'text' | 'file'>('text');
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('general');

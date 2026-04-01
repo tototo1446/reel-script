@@ -702,6 +702,17 @@ const App: React.FC = () => {
             台本生成
           </button>
           <button
+            onClick={() => setMode('KNOWLEDGE')}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'KNOWLEDGE' ? 'bg-zinc-700 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+          >
+            ナレッジ
+            {knowledgeItems.length > 0 && (
+              <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-purple-500/20 text-purple-300">
+                {knowledgeItems.length}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setMode('LOGS')}
             className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'LOGS' ? 'bg-zinc-700 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
@@ -831,15 +842,6 @@ const App: React.FC = () => {
                     sessions={pastSessions}
                     selectedIds={selectedSessionIds}
                     onSelectionChange={setSelectedSessionIds}
-                  />
-
-                  <KnowledgeManager
-                    knowledgeItems={knowledgeItems}
-                    onAddText={handleAddTextKnowledge}
-                    onAddFile={handleAddFileKnowledge}
-                    onDelete={handleDeleteKnowledge}
-                    isExtracting={isKnowledgeExtracting}
-                    extractionProgress={knowledgeExtractionProgress}
                   />
 
                   <div>
@@ -1028,6 +1030,32 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+          </ErrorBoundary>
+        )}
+
+        {/* === ナレッジモード === */}
+        {mode === 'KNOWLEDGE' && (
+          <ErrorBoundary fallbackLabel="ナレッジモード">
+          <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-500">
+            <div className="glass p-6 rounded-2xl">
+              <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+                <span className="w-2 h-6 bg-purple-500 rounded-full"></span>
+                ナレッジ蓄積
+              </h2>
+              <p className="text-xs text-zinc-500 mb-6">
+                運用ノウハウやガイドラインを登録すると、台本生成AIが方針を学習して反映します。テキスト入力またはPDF・画像のアップロードに対応しています。
+              </p>
+
+              <KnowledgeManager
+                knowledgeItems={knowledgeItems}
+                onAddText={handleAddTextKnowledge}
+                onAddFile={handleAddFileKnowledge}
+                onDelete={handleDeleteKnowledge}
+                isExtracting={isKnowledgeExtracting}
+                extractionProgress={knowledgeExtractionProgress}
+              />
             </div>
           </div>
           </ErrorBoundary>
