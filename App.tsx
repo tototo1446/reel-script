@@ -16,6 +16,7 @@ import { SessionSelector } from './components/SessionSelector';
 import { OverallAnalysisCard } from './components/OverallAnalysisCard';
 import { VideoTitleDialog } from './components/VideoTitleDialog';
 import { ScriptHistoryList } from './components/ScriptHistoryList';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { extractFramesAtTimestamps, ExtractionProgress } from './utils/videoFrameExtractor';
 import { downloadSceneThumbnail, downloadScenesTsv, downloadScenesZip } from './utils/downloadHelper';
@@ -670,6 +671,7 @@ const App: React.FC = () => {
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
         {/* === 分析モード (シーン分析UI) === */}
         {mode === 'ANALYSIS' && (
+          <ErrorBoundary fallbackLabel="分析モード">
           <div className="space-y-6 animate-in fade-in duration-500">
             {!sceneSession ? (
               <div className="flex flex-col items-center">
@@ -760,10 +762,12 @@ const App: React.FC = () => {
               />
             )}
           </div>
+          </ErrorBoundary>
         )}
 
         {/* === 台本生成モード === */}
         {mode === 'GENERATION' && (
+          <ErrorBoundary fallbackLabel="台本生成モード">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in slide-in-from-bottom-4 duration-500">
             {/* Strategy Sidebar */}
             <div className="lg:col-span-7 space-y-6">
@@ -968,6 +972,7 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
         {/* === 成長ログモード === */}
