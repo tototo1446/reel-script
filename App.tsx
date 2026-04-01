@@ -549,7 +549,7 @@ const App: React.FC = () => {
       // Supabase保存（バックグラウンド）
       saveScriptToSupabase(script, selectedSessionIds)
         .then(dbId => {
-          setSupabaseScriptId(dbId);
+          if (dbId) setSupabaseScriptId(dbId);
           return fetchScripts();
         })
         .then(scripts => setPastScripts(scripts))

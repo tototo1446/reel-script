@@ -272,39 +272,45 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
 export const saveScriptToSupabase = async (
   script: GeneratedScript,
   referenceSessionIds: string[]
-): Promise<string> => {
-  const { data, error } = await supabase
-    .from('generated_scripts')
-    .insert({
-      theme: script.theme,
-      tone: script.tone,
-      pattern_id: script.patternId,
-      scenes: script.scenes,
-    })
-    .select('id')
-    .single();
+): Promise<string | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('generated_scripts')
+      .insert({
+        theme: script.theme,
+        tone: script.tone,
+        pattern_id: script.patternId,
+        scenes: script.scenes,
+      })
+      .select('id')
+      .single();
 
-  if (error || !data) {
-    throw new Error(`台本保存エラー: ${error?.message}`);
-  }
-
-  const dbScriptId = data.id;
-
-  if (referenceSessionIds.length > 0) {
-    const refs = referenceSessionIds.map(sessionId => ({
-      script_id: dbScriptId,
-      session_id: sessionId,
-    }));
-    const { error: refError } = await supabase
-      .from('script_references')
-      .insert(refs);
-
-    if (refError) {
-      console.error('台本参照保存エラー:', refError);
+    if (error || !data) {
+      console.error('台本保存エラー:', error?.message);
+      return null;
     }
-  }
 
-  return dbScriptId;
+    const dbScriptId = data.id;
+
+    if (referenceSessionIds.length > 0) {
+      const refs = referenceSessionIds.map(sessionId => ({
+        script_id: dbScriptId,
+        session_id: sessionId,
+      }));
+      const { error: refError } = await supabase
+        .from('script_references')
+        .insert(refs);
+
+      if (refError) {
+        console.error('台本参照保存エラー:', refError);
+      }
+    }
+
+    return dbScriptId;
+  } catch (err) {
+    console.error('台本保存エラー（テーブル未作成の可能性）:', err);
+    return null;
+  }
 };
 
 // 台本を更新（チャット修正後）
@@ -327,18 +333,23 @@ export const updateScriptInSupabase = async (
 
 // 過去の台本一覧を取得
 export const fetchScripts = async (): Promise<ScriptHistoryItem[]> => {
-  const { data, error } = await supabase
-    .from('generated_scripts')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50);
+  try {
+    const { data, error } = await supabase
+      .from('generated_scripts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
 
-  if (error) {
-    console.error('台本一覧取得エラー:', error);
+    if (error) {
+      console.error('台本一覧取得エラー:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (err) {
+    console.error('台本一覧取得エラー（テーブル未作成の可能性）:', err);
     return [];
   }
-
-  return data || [];
 };
 
 // 台本の参照セッションIDを取得
