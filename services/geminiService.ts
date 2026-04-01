@@ -379,52 +379,84 @@ export const initScriptChat = (script: GeneratedScript): void => {
   });
 };
 
-// 単一シーンのAI分析（内部ヘルパー）
+// タイムアウト付きPromiseラッパー
+const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label}: ${ms}msでタイムアウト`)), ms)
+    ),
+  ]);
+};
+
+// 単一シーンのAI分析（リトライ付き）
+const SCENE_TIMEOUT_MS = 30_000; // 30秒
+const MAX_RETRIES = 2;
+
 const analyzeSingleScene = async (
   scene: SceneData
 ): Promise<{ sceneId: string; analysis: SceneAnalysis }> => {
-  try {
-    const base64Data = scene.thumbnailDataUrl.split(',')[1];
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const base64Data = scene.thumbnailDataUrl.split(',')[1];
+      if (!base64Data) {
+        console.warn(`シーン${scene.sceneNumber}: サムネイルデータが不正（base64でない可能性）`);
+        return { sceneId: scene.id, analysis: { description: '画像データを取得できませんでした', tags: [] } };
+      }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: base64Data,
-          },
-        },
-        `この動画フレーム画像を分析してください。
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [
+            {
+              inlineData: {
+                mimeType: 'image/jpeg',
+                data: base64Data,
+              },
+            },
+            `この動画フレーム画像を分析してください。
 シーン番号: ${scene.sceneNumber}
 タイムスタンプ: ${scene.timestampFormatted}
 
 以下を出力:
 1. description: シーンの内容を2-3文で簡潔に説明（日本語）
 2. tags: 関連ハッシュタグを3-5個（#付き、日本語）`
-      ],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            description: { type: Type.STRING },
-            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-          },
-          required: ['description', 'tags']
-        }
-      }
-    });
+          ],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                description: { type: Type.STRING },
+                tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ['description', 'tags']
+            }
+          }
+        }),
+        SCENE_TIMEOUT_MS,
+        `シーン${scene.sceneNumber}`
+      );
 
-    return { sceneId: scene.id, analysis: JSON.parse(response.text!) };
-  } catch (err) {
-    console.error(`シーン${scene.sceneNumber}の分析に失敗:`, err);
-    return { sceneId: scene.id, analysis: { description: '分析に失敗しました', tags: [] } };
+      return { sceneId: scene.id, analysis: JSON.parse(response.text!) };
+    } catch (err) {
+      const isLastAttempt = attempt === MAX_RETRIES;
+      if (isLastAttempt) {
+        console.error(`シーン${scene.sceneNumber}の分析に失敗（${attempt + 1}回試行後）:`, err);
+        return { sceneId: scene.id, analysis: { description: '分析に失敗しました', tags: [] } };
+      }
+      // リトライ前にバックオフ（2秒, 4秒）
+      const backoff = (attempt + 1) * 2000;
+      console.warn(`シーン${scene.sceneNumber}: リトライ${attempt + 1}回目（${backoff}ms後）`, err);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+    }
   }
+  // unreachable, but TypeScript requires it
+  return { sceneId: scene.id, analysis: { description: '分析に失敗しました', tags: [] } };
 };
 
-// シーンフレームの並列AI分析（Gemini 2.5 Flash、4並列バッチ処理）
-const SCENE_ANALYSIS_CONCURRENCY = 4;
+// シーンフレームの並列AI分析（Gemini 2.5 Flash、2並列バッチ処理）
+const SCENE_ANALYSIS_CONCURRENCY = 2;
 
 export const analyzeSceneFrames = async (
   scenes: SceneData[],
@@ -449,9 +481,9 @@ export const analyzeSceneFrames = async (
       onProgress(completedCount, scenes.length);
     }
 
-    // バッチ間のRate limit対策（最終バッチ以外）
+    // バッチ間のRate limit対策（最終バッチ以外）— 1.5秒間隔
     if (i + SCENE_ANALYSIS_CONCURRENCY < scenes.length) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
 };
